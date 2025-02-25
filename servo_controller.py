@@ -8,6 +8,7 @@ BAUDRATE = 1_000_000
 TIMEOUT_MS = 1000
 NUM_READ_RETRY = 20
 NUM_WRITE_RETRY = 20
+DEGREE_SCALING_FACTOR = 1.5
 
 SCS_SERIES_CONTROL_TABLE = {
     "Torque_Enable":          (40, 1),
@@ -16,15 +17,6 @@ SCS_SERIES_CONTROL_TABLE = {
 }
 
 MODEL_RESOLUTION = 4096
-
-class DeviceNotConnectedError(Exception):
-    pass
-
-class DeviceAlreadyConnectedError(Exception):
-    pass
-
-class ServoError(Exception):
-    pass
 
 class FeetechController:
     def __init__(self, port, servo_ids):
@@ -40,7 +32,7 @@ class FeetechController:
 
     def connect(self):
         if self.is_connected:
-            raise DeviceAlreadyConnectedError("Controller is already connected.")
+            raise RuntimeError("Controller is already connected.")
 
         self.port_handler = scs.PortHandler(self.port)
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
@@ -67,7 +59,7 @@ class FeetechController:
 
     def disconnect(self):
         if not self.is_connected:
-            raise DeviceNotConnectedError("Controller is not connected.")
+            raise RuntimeError("Controller is not connected.")
 
         if self.port_handler:
             self.port_handler.closePort()
@@ -82,7 +74,7 @@ class FeetechController:
 
     def read(self, data_name, servo_ids=None):
         if not self.is_connected:
-            raise DeviceNotConnectedError("Controller is not connected.")
+            raise RuntimeError("Controller is not connected.")
 
         if servo_ids is None:
             servo_ids = self.servo_ids
@@ -107,7 +99,7 @@ class FeetechController:
             if comm_result == scs.COMM_SUCCESS:
                 break
         if comm_result != scs.COMM_SUCCESS:
-            raise ServoError(
+            raise RuntimeError(
                 f"[read] Communication error: {self.packet_handler.getTxRxResult(comm_result)}"
             )
 
@@ -120,7 +112,7 @@ class FeetechController:
 
     def write(self, data_name, values, servo_ids=None):
         if not self.is_connected:
-            raise DeviceNotConnectedError("Controller is not connected.")
+            raise RuntimeError("Controller is not connected.")
 
         if servo_ids is None:
             servo_ids = self.servo_ids
@@ -152,7 +144,7 @@ class FeetechController:
             if comm_result == scs.COMM_SUCCESS:
                 break
         if comm_result != scs.COMM_SUCCESS:
-            raise ServoError(
+            raise RuntimeError(
                 f"[write] Communication error: {self.packet_handler.getTxRxResult(comm_result)}"
             )
 
@@ -218,18 +210,13 @@ class FeetechController:
     def center_all(self):
         self.write("Goal_Position", 2048, self.servo_ids)
 
-    def print_all_positions(self):
-        pos_dict = self.get_all_positions()
-        for servo_id, val in pos_dict.items():
-            print(f"Servo {servo_id}: {val}")
-
     def get_position_degrees(self, servo_id, retry_count=3):
         raw_position = self.get_position(servo_id, retry_count)
         if raw_position is None:
             return None
             
         position_centered = raw_position - 2048
-        position_degrees = position_centered / 2048 * 120 * 1.5
+        position_degrees = position_centered / 2048 * 120 * DEGREE_SCALING_FACTOR
         
         return position_degrees
         
@@ -239,35 +226,7 @@ class FeetechController:
         
         for servo_id, raw_pos in raw_positions.items():
             position_centered = raw_pos - 2048
-            position_degrees = position_centered / 2048 * 120 * 1.5
+            position_degrees = position_centered / 2048 * 120 * DEGREE_SCALING_FACTOR
             degree_positions[servo_id] = position_degrees
             
         return degree_positions
-        
-    def print_all_positions_degrees(self):
-        pos_dict = self.get_all_positions_degrees()
-        for servo_id, val in pos_dict.items():
-            print(f"Servo {servo_id}: {val:.2f}°")
-            
-    def monitor_positions(self, update_interval=0.1, duration=None):
-        print("Monitoring servo positions. Press Ctrl+C to stop.")
-        print("Center position is 0 degrees, range is -180 to 180 degrees")
-        
-        start_time = time.time()
-        try:
-            while True:
-                if duration is not None and time.time() - start_time > duration:
-                    break
-                    
-                positions = self.get_all_positions_degrees()
-                
-                print("\r", end="")
-                output = []
-                for servo_id, pos in positions.items():
-                    output.append(f"Servo {servo_id}: {pos:.2f}°")
-                print(" | ".join(output), end="")
-                
-                time.sleep(update_interval)
-                
-        except KeyboardInterrupt:
-            print("\nMonitoring stopped by user.")

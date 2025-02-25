@@ -98,5 +98,5 @@ if __name__ == "__main__":
     
     controller = FeetechController(port, servo_ids)
     controller.connect()
-
+    controller.enable_torque()
     leader(controller, 1)
