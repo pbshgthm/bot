@@ -93,10 +93,10 @@ def leader(controller, leader_servo_id=None):
         traceback.print_exc()
 
 if __name__ == "__main__":
-    servo_ids = [1, 2, 3, 4, 5, 6]
-    port = "/dev/tty.usbserial-10"
+    servo_ids = [2, 3, 4, 5, 6]
+    port = "/dev/tty.usbmodem58FA0829321"
     
     controller = FeetechController(port, servo_ids)
     controller.connect()
     controller.enable_torque()
-    leader(controller, 1)
+    leader(controller, 2)
