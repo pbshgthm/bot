@@ -2,6 +2,7 @@ import time
 import numpy as np
 import traceback
 import scservo_sdk as scs
+import serial
 
 PROTOCOL_VERSION = 0
 BAUDRATE = 1_000_000
@@ -19,9 +20,10 @@ SCS_SERIES_CONTROL_TABLE = {
 MODEL_RESOLUTION = 4096
 
 class FeetechController:
-    def __init__(self, port, servo_ids):
+    def __init__(self, port, servo_ids, virtual_port=False):
         self.port = port
         self.servo_ids = servo_ids
+        self.virtual_port = virtual_port
         
         self.port_handler = None
         self.packet_handler = None
@@ -38,11 +40,32 @@ class FeetechController:
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
 
         try:
+            # Store the original setupPort method
+            original_setup_port = self.port_handler.setupPort
+            
+            def virtual_port_setup(cflag_baud):
+                if self.port_handler.is_open:
+                    self.port_handler.closePort()
+
+                self.port_handler.ser = serial.Serial(
+                    port=self.port_handler.port_name,
+                    # baudrate is intentionally not set here
+                    bytesize=serial.EIGHTBITS,
+                    timeout=0
+                )
+
+                self.port_handler.is_open = True
+                self.port_handler.ser.reset_input_buffer()
+                self.port_handler.tx_time_per_byte = (1000.0 / self.port_handler.baudrate) * 10.0
+                return True
+                
+            # Replace the setupPort method based on virtual_port setting
+            if self.virtual_port:
+                self.port_handler.setupPort = virtual_port_setup
+                print(f"[FeetechController] Using virtual port setup for {self.port}")
+            
             if not self.port_handler.openPort():
                 raise OSError(f"Failed to open port '{self.port}'.")
-
-            if not self.port_handler.setBaudRate(BAUDRATE):
-                raise OSError(f"Failed to set baud rate '{BAUDRATE}' on port '{self.port}'.")
 
             self.port_handler.setPacketTimeoutMillis(TIMEOUT_MS)
             self.is_connected = True

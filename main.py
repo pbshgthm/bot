@@ -50,6 +50,158 @@ def bounce(controller, num_cycles=3, min_pos=500, max_pos=3500, delay=0.5):
     
     print("Bounce sequence completed!")
 
+def bounce_1(controller, num_cycles=3, delay=0.5):
+    """
+    Bounce only servo with ID 1 between -90 to 90 degrees.
+    
+    Args:
+        controller: FeetechController instance
+        num_cycles: Number of bounce cycles to perform
+        delay: Delay between movements in seconds
+    """
+    # Calculate position values for -90 and 90 degrees
+    center_pos = 2048
+    min_pos = 1024  # -90 degrees
+    max_pos = 3072  # 90 degrees
+    
+    print("Starting bounce sequence for servo ID 1 (-90° to 90°)...")
+    
+    # Check if servo ID 1 is in the controller's servo_ids
+    if 1 not in controller.servo_ids:
+        print("Error: Servo ID 1 not found in controller's servo list.")
+        return
+    
+    # Make sure torque is enabled
+    try:
+        print("Enabling torque on servo 1...")
+        controller.enable_torque(1)
+        time.sleep(0.5)  # Give time for the command to take effect
+    except Exception as e:
+        print(f"Warning: Error enabling torque: {e}")
+    
+    # Center servo 1
+    print("Centering servo 1 (0°)...")
+    try:
+        controller.write("Goal_Position", center_pos, 1)
+        print("Center command sent successfully")
+    except Exception as e:
+        print(f"Error sending center command: {e}")
+        return
+    
+    time.sleep(delay * 2)
+    
+    # Try to get current position to verify communication
+    try:
+        current_pos = controller.get_position(1)
+        if current_pos is None:
+            print("Warning: Unable to read servo position. Communication may be unreliable.")
+        else:
+            current_degrees = controller.get_position_degrees(1)
+            print(f"Current servo position: {current_pos} ({current_degrees:.1f}°)")
+    except Exception as e:
+        print(f"Error reading position: {e}")
+    
+    for cycle in range(num_cycles):
+        print(f"Bounce cycle {cycle+1}/{num_cycles}")
+        
+        # Move to 90 degrees
+        print(f"Moving to 90° (position {max_pos})...")
+        try:
+            controller.write("Goal_Position", max_pos, 1)
+            print("90° position command sent successfully")
+        except Exception as e:
+            print(f"Error sending 90° position command: {e}")
+            continue
+        
+        # Wait for servo 1 to reach position
+        start_time = time.time()
+        position_reached = False
+        while time.time() - start_time < 3.0:  # 3 second timeout
+            try:
+                pos = controller.get_position(1)
+                if pos is None:
+                    print("Warning: Unable to read position")
+                else:
+                    degrees = controller.get_position_degrees(1)
+                    print(f"\rCurrent position: {pos} ({degrees:.1f}°) | Target: {max_pos} (90°)", end="")
+                    if abs(pos - max_pos) <= 100:
+                        print(f"\nServo 1 reached target position 90° (±5°)")
+                        position_reached = True
+                        break
+            except Exception as e:
+                print(f"\nError reading position: {e}")
+            time.sleep(0.1)
+        
+        if not position_reached:
+            print("\nTimeout waiting for servo to reach 90°")
+        
+        time.sleep(delay)
+        
+        # Move to -90 degrees
+        print(f"Moving to -90° (position {min_pos})...")
+        try:
+            controller.write("Goal_Position", min_pos, 1)
+            print("-90° position command sent successfully")
+        except Exception as e:
+            print(f"Error sending -90° position command: {e}")
+            continue
+        
+        # Wait for servo 1 to reach position
+        start_time = time.time()
+        position_reached = False
+        while time.time() - start_time < 3.0:  # 3 second timeout
+            try:
+                pos = controller.get_position(1)
+                if pos is None:
+                    print("Warning: Unable to read position")
+                else:
+                    degrees = controller.get_position_degrees(1)
+                    print(f"\rCurrent position: {pos} ({degrees:.1f}°) | Target: {min_pos} (-90°)", end="")
+                    if abs(pos - min_pos) <= 100:
+                        print(f"\nServo 1 reached target position -90° (±5°)")
+                        position_reached = True
+                        break
+            except Exception as e:
+                print(f"\nError reading position: {e}")
+            time.sleep(0.1)
+        
+        if not position_reached:
+            print("\nTimeout waiting for servo to reach -90°")
+        
+        time.sleep(delay)
+    
+    # Return to center position
+    print("Returning to center position (0°)...")
+    try:
+        controller.write("Goal_Position", center_pos, 1)
+        print("Center position command sent successfully")
+    except Exception as e:
+        print(f"Error sending center position command: {e}")
+    
+    # Wait for servo 1 to reach center position
+    start_time = time.time()
+    position_reached = False
+    while time.time() - start_time < 3.0:  # 3 second timeout
+        try:
+            pos = controller.get_position(1)
+            if pos is None:
+                print("Warning: Unable to read position")
+            else:
+                degrees = controller.get_position_degrees(1)
+                print(f"\rCurrent position: {pos} ({degrees:.1f}°) | Target: {center_pos} (0°)", end="")
+                if abs(pos - center_pos) <= 100:
+                    print(f"\nServo 1 reached center position 0° (±5°)")
+                    position_reached = True
+                    break
+        except Exception as e:
+            print(f"\nError reading position: {e}")
+        time.sleep(0.1)
+    
+    if not position_reached:
+        print("\nTimeout waiting for servo to reach center position")
+    
+    print("Bounce sequence completed for servo 1!")
+
 def leader(controller, leader_servo_id=None):
     if leader_servo_id is None:
         leader_servo_id = controller.servo_ids[0]
@@ -92,11 +244,13 @@ def leader(controller, leader_servo_id=None):
         print(f"\nError: {e}")
         traceback.print_exc()
 
+
+def get_first_servo_position(controller):
+    return controller.get_position(controller.servo_ids[0])
+
 if __name__ == "__main__":
-    servo_ids = [2, 3, 4, 5, 6]
-    port = "/dev/tty.usbmodem58FA0829321"
-    
-    controller = FeetechController(port, servo_ids)
+    servo_ids = [1]
+    port = "/tmp/vport1"
+    controller = FeetechController(port, servo_ids, virtual_port=True)
     controller.connect()
-    controller.enable_torque()
-    leader(controller, 2)
+    bounce_1(controller)
