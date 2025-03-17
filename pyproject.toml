@@ -1,7 +1,7 @@
 [project]
-name = "bot"
+name = "servo-controller"
 version = "0.1.0"
-description = "Add your description here"
+description = "Servo control system with web interface"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,4 +9,12 @@ dependencies = [
     "flask>=3.1.0",
     "numpy>=2.2.3",
     "requests>=2.32.3",
+    "pyserial>=3.5",
 ]
+
+[build-system]
+requires = ["setuptools>=42.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["servo_controller", "scripts", "ui"]

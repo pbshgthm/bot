@@ -1,0 +1,9 @@
+{
+  "port": "/dev/tty.usbmodem58FA0829321",
+  "servos": {
+    "base_yaw": 1,
+    "pitch": 2,
+    "pitch2": 3,
+    "pitch3": 4
+  }
+}
