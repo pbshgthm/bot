@@ -2,3 +2,10 @@ __pycache__/
 .venv/
 .esphome/
 .python-version
+
+#egg-info
+*.egg-info/
+
+#dist
+dist/
+
