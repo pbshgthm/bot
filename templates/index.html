@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robotic Arm Simulator</title>
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --bg-medium: #1E1E1E;
+            --bg-light: #2D2D2D;
+            --accent: #6200EA;
+            --accent-light: #9D46FF;
+            --text-light: #EEEEEE;
+            --text-dim: #BBBBBB;
+            --primary: #00E5FF;
+            --primary-dark: #00B8D4;
+            --success: #00C853;
+            --warning: #FFAB00;
+            --danger: #FF4081;
+            --track-color: #424242;
+            --border-radius: 8px;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            height: 100vh;
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            overflow: hidden;
+        }
+        
+        #canvas-container {
+            flex: 3;
+            height: 100%;
+            background-color: var(--bg-dark);
+            position: relative;
+        }
+        
+        #controls {
+            flex: 1;
+            padding: 20px;
+            background-color: var(--bg-medium);
+            overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0, 0, 0, 0.3);
+            min-width: 300px;
+            max-width: 450px;
+            border-left: 1px solid var(--bg-light);
+        }
+        
+        h2, h3 {
+            margin-bottom: 20px;
+            color: var(--primary);
+            border-bottom: 1px solid var(--accent);
+            padding-bottom: 10px;
+            font-weight: 500;
+        }
+        
+        .slider-container {
+            margin-bottom: 25px;
+            background-color: var(--bg-light);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(98, 0, 234, 0.2);
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+            color: var(--text-light);
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            -webkit-appearance: none;
+            height: 8px;
+            background: var(--track-color);
+            border-radius: 4px;
+            outline: none;
+            margin: 10px 0;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(0, 229, 255, 0.8);
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 8px rgba(0, 229, 255, 0.8);
+        }
+        
+        input[type="range"]:hover::-webkit-slider-thumb {
+            background: var(--primary-dark);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 1);
+        }
+        
+        input[type="range"]:hover::-moz-range-thumb {
+            background: var(--primary-dark);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 1);
+        }
+        
+        .value-display {
+            margin-top: 10px;
+            text-align: center;
+            font-family: monospace;
+            font-size: 16px;
+            color: var(--primary);
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px rgba(0, 229, 255, 0.5);
+        }
+        
+        #debug-panel {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: var(--bg-light);
+            border-radius: var(--border-radius);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(98, 0, 234, 0.2);
+        }
+        
+        #debug-log {
+            height: 120px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            padding: 10px;
+            font-size: 12px;
+            border-radius: 4px;
+            border: 1px solid var(--accent);
+        }
+        
+        #server-status {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: var(--bg-light);
+            border-radius: var(--border-radius);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(98, 0, 234, 0.2);
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed rgba(98, 0, 234, 0.3);
+        }
+        
+        .status-label {
+            font-weight: bold;
+            color: var(--text-dim);
+        }
+        
+        .status-value {
+            font-family: monospace;
+            color: var(--primary);
+        }
+        
+        .server-response {
+            background-color: var(--bg-dark);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 120px;
+            overflow-y: auto;
+            color: var(--text-light);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 12px 20px;
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s ease;
+            flex: 1;
+            box-shadow: 0 2px 8px rgba(98, 0, 234, 0.5);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.85em;
+        }
+        
+        button:hover {
+            background-color: var(--accent-light);
+            box-shadow: 0 4px 12px rgba(98, 0, 234, 0.7);
+            transform: translateY(-2px);
+        }
+        
+        button:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 3px rgba(98, 0, 234, 0.5);
+        }
+        
+        .servo-label {
+            display: inline-block;
+            background-color: var(--accent);
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-right: 8px;
+            font-size: 0.7em;
+            color: var(--text-light);
+            vertical-align: middle;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        /* Loading animation for connecting state */
+        .connecting {
+            position: relative;
+            color: var(--warning) !important;
+        }
+        
+        .connecting::after {
+            content: '';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+        
+        /* Status indicators */
+        .connected {
+            color: var(--success) !important;
+            text-shadow: 0 0 5px rgba(0, 200, 83, 0.5);
+        }
+        
+        .disconnected {
+            color: var(--danger) !important;
+            text-shadow: 0 0 5px rgba(255, 64, 129, 0.5);
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--bg-medium);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--accent);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-light);
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="controls">
+        <h2>Servo Controls</h2>
+        <div class="slider-container">
+            <label for="base-yaw"><span class="servo-label">ID: 1</span>Base Yaw</label>
+            <input type="range" id="base-yaw" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="base-yaw-value">0°</div>
+        </div>
+        
+        <div class="slider-container">
+            <label for="pitch"><span class="servo-label">ID: 2</span>Pitch 1</label>
+            <input type="range" id="pitch" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="pitch-value">0°</div>
+        </div>
+        
+        <div class="slider-container">
+            <label for="pitch2"><span class="servo-label">ID: 3</span>Pitch 2</label>
+            <input type="range" id="pitch2" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="pitch2-value">0°</div>
+        </div>
+        
+        <div class="slider-container">
+            <label for="pitch3"><span class="servo-label">ID: 4</span>Pitch 3</label>
+            <input type="range" id="pitch3" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="pitch3-value">0°</div>
+        </div>
+        
+        <div class="action-buttons">
+            <button id="center-servos">Center All</button>
+            <button id="refresh-status">Refresh</button>
+        </div>
+        
+        <div id="server-status">
+            <h3>Server Communication</h3>
+            <div class="status-item">
+                <span class="status-label">Connection:</span>
+                <span class="status-value" id="connection-status">Checking...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Last Updated:</span>
+                <span class="status-value" id="last-updated">Never</span>
+            </div>
+            <div>
+                <span class="status-label">Server Response:</span>
+                <div class="server-response" id="server-response">No response yet</div>
+            </div>
+        </div>
+        
+        <div id="debug-panel">
+            <h3>Debug Console</h3>
+            <div id="debug-log"></div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.min.js"></script>
+    <script>
+        // Override console.log to display in our debug panel
+        const originalConsoleLog = console.log;
+        console.log = function() {
+            const args = Array.from(arguments);
+            originalConsoleLog.apply(console, args);
+            
+            const debugLog = document.getElementById('debug-log');
+            if (debugLog) {
+                const logEntry = document.createElement('div');
+                logEntry.textContent = args.map(arg => 
+                    typeof arg === 'object' ? JSON.stringify(arg) : arg
+                ).join(' ');
+                debugLog.appendChild(logEntry);
+                debugLog.scrollTop = debugLog.scrollHeight;
+            }
+        };
+        
+        // Update connection status with visual indication
+        function updateConnectionStatus(status) {
+            const element = document.getElementById('connection-status');
+            if (!element) return;
+            
+            // Remove existing classes
+            element.classList.remove('connecting', 'connected', 'disconnected');
+            
+            // Set text and add appropriate class
+            if (status === 'Connecting...') {
+                element.textContent = 'Connecting';
+                element.classList.add('connecting');
+            } else if (status === 'Connected') {
+                element.textContent = status;
+                element.classList.add('connected');
+            } else {
+                element.textContent = status;
+                element.classList.add('disconnected');
+            }
+        }
+        
+        console.log("Debug console initialized");
+    </script>
+    <script src="{{ url_for('static', filename='js/robot.js') }}"></script>
+</body>
+</html> 

@@ -6,5 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "feetech-servo-sdk>=1.0.0",
+    "flask>=3.1.0",
     "numpy>=2.2.3",
+    "requests>=2.32.3",
 ]
