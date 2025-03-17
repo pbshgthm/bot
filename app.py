@@ -94,7 +94,7 @@ def center_servos():
 
 if __name__ == '__main__':
     try:
-        app.run(debug=True, host='0.0.0.0', port=1212)
+        app.run(host='0.0.0.0', port=1212)
     finally:
         # Clean up hardware resources when the app exits
         if servo_controller and servo_controller._is_connected:

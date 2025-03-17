@@ -2,80 +2,93 @@
 let scene, camera, renderer, controls;
 let baseYawGroup, pitch1Group, pitch2Group, pitch3Group;
 
-// Color scheme - improved color harmony
+// Color scheme - improved color contrast and visibility
 const COLORS = {
-  background: 0x121212, // Dark background
-  base: 0x37474f, // Dark slate blue/gray
-  servo: 0x6200ea, // Deep purple for servo cylinders
-  joint: 0x00e5ff, // Cyan for joints
-  arm: 0xff4081, // Pink for arms
-  endEffector: 0xffab00, // Amber for end effector
+  background: 0x1a1a1a, // Dark gray background
+  base: 0x455a64, // Darker blue/gray for base
+  servo: 0x5c6bc0, // Brighter indigo for servo cylinders
+  joint: 0x29b6f6, // Bright blue for joints
+  arm: 0x9575cd, // Lighter purple for arms - better contrast
+  endEffector: 0xff9800, // Brighter orange for end effector
   grid: 0x212121, // Dark gray for grid
   gridCenter: 0x424242, // Medium gray for grid center
-  glow: 0x9c27b0, // Purple glow
+  glow: 0xb388ff, // Brighter purple glow
+  transparent: 0x80deea, // Transparent cyan for rotation discs
+  highlight: 0xd1c4e9, // Highlight color for edges
 };
 
-// Material definitions with better metalness and glow
+// Material definitions with better contrast and glow
 const MATERIALS = {
   base: new THREE.MeshStandardMaterial({
     color: COLORS.base,
-    roughness: 0.5,
-    metalness: 0.7,
+    roughness: 0.4,
+    metalness: 0.8,
+    emissive: 0x263238,
+    emissiveIntensity: 0.1,
   }),
   servo: new THREE.MeshStandardMaterial({
     color: COLORS.servo,
     roughness: 0.3,
-    metalness: 0.8,
+    metalness: 0.9,
     emissive: COLORS.servo,
-    emissiveIntensity: 0.2,
+    emissiveIntensity: 0.3,
   }),
   joint: new THREE.MeshStandardMaterial({
     color: COLORS.joint,
     roughness: 0.2,
     metalness: 0.9,
     emissive: COLORS.joint,
-    emissiveIntensity: 0.4,
+    emissiveIntensity: 0.6,
   }),
   arm: new THREE.MeshStandardMaterial({
     color: COLORS.arm,
-    roughness: 0.4,
-    metalness: 0.6,
+    roughness: 0.3,
+    metalness: 0.7,
     emissive: COLORS.arm,
-    emissiveIntensity: 0.1,
+    emissiveIntensity: 0.3,
   }),
   endEffector: new THREE.MeshStandardMaterial({
     color: COLORS.endEffector,
     roughness: 0.2,
     metalness: 0.9,
     emissive: COLORS.endEffector,
-    emissiveIntensity: 0.3,
+    emissiveIntensity: 0.5,
   }),
   glow: new THREE.MeshBasicMaterial({
     color: COLORS.glow,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.7,
+  }),
+  transparent: new THREE.MeshStandardMaterial({
+    color: COLORS.transparent,
+    transparent: true,
+    opacity: 0.4,
+    roughness: 0.1,
+    metalness: 0.9,
+    emissive: COLORS.transparent,
+    emissiveIntensity: 0.3,
   }),
 };
 
-// Dimensions - standardized arm lengths
+// Dimensions - updated with thicker components
 const DIMENSIONS = {
-  baseHeight: 0.5,
-  baseRadius: 1.2,
+  baseHeight: 1.2,
+  baseRadius: 2.5,
 
-  yawHeight: 0.8, // Shorter first segment
-  yawRadius: 0.5,
+  yawHeight: 4.0, // First cylinder should be 4 units
+  yawRadius: 1.5,
 
-  pitch1Length: 2.0,
-  pitch1Width: 0.4,
+  pitch1Length: 18.0, // Second segment 18 units
+  pitch1Width: 3.0, // Increased to 3 units thick
 
-  pitch2Length: 2.0, // Same length as pitch1
-  pitch2Width: 0.35,
+  pitch2Length: 18.0, // Third segment 18 units
+  pitch2Width: 3.0, // Increased to 3 units thick
 
-  pitch3Length: 2.0, // Same length as pitch1 and pitch2
-  pitch3Width: 0.3,
+  pitch3Length: 5.0, // Fourth segment 5 units
+  pitch3Width: 3.0, // Increased to 3 units thick
 
-  jointRadius: 0.4,
-  jointThickness: 0.15,
+  jointRadius: 2.0, // Larger joints
+  jointThickness: 0.6,
 };
 
 // Initialize the scene
@@ -98,19 +111,19 @@ function initScene() {
   scene.background = new THREE.Color(COLORS.background);
 
   // Add subtle fog for depth perception
-  scene.fog = new THREE.FogExp2(COLORS.background, 0.025);
+  scene.fog = new THREE.FogExp2(COLORS.background, 0.006);
 }
 
 // Initialize camera
 function initCamera() {
   camera = new THREE.PerspectiveCamera(
-    75,
+    60,
     window.innerWidth / window.innerHeight,
     0.1,
     1000
   );
-  camera.position.set(6, 6, 6);
-  camera.lookAt(0, 0, 0);
+  camera.position.set(40, 25, 40);
+  camera.lookAt(0, 20, 0);
 }
 
 // Initialize renderer
@@ -127,7 +140,7 @@ function initRenderer() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.physicallyCorrectLights = true;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.4; // Increased exposure for better visibility
 
   document.getElementById("canvas-container").appendChild(renderer.domElement);
 
@@ -136,47 +149,52 @@ function initRenderer() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
   controls.enableZoom = true;
-  controls.minDistance = 2;
-  controls.maxDistance = 20;
+  controls.minDistance = 10;
+  controls.maxDistance = 120;
 }
 
 // Initialize lights
 function initLights() {
-  // Ambient light for base illumination
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+  // Ambient light for base illumination - increased for better visibility
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
   scene.add(ambientLight);
 
   // Main directional light with shadows
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(5, 10, 5);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  directionalLight.position.set(20, 30, 20);
   directionalLight.castShadow = true;
-  directionalLight.shadow.mapSize.width = 1024;
-  directionalLight.shadow.mapSize.height = 1024;
+  directionalLight.shadow.mapSize.width = 2048;
+  directionalLight.shadow.mapSize.height = 2048;
   directionalLight.shadow.camera.near = 0.5;
-  directionalLight.shadow.camera.far = 25;
-  directionalLight.shadow.camera.left = -10;
-  directionalLight.shadow.camera.right = 10;
-  directionalLight.shadow.camera.top = 10;
-  directionalLight.shadow.camera.bottom = -10;
+  directionalLight.shadow.camera.far = 100;
+  directionalLight.shadow.camera.left = -50;
+  directionalLight.shadow.camera.right = 50;
+  directionalLight.shadow.camera.top = 50;
+  directionalLight.shadow.camera.bottom = -50;
   scene.add(directionalLight);
 
   // Add a second directional light from another angle
-  const secondLight = new THREE.DirectionalLight(0xa080ff, 0.4);
-  secondLight.position.set(-5, 5, -5);
+  const secondLight = new THREE.DirectionalLight(0xbbdefb, 0.6);
+  secondLight.position.set(-25, 20, -20);
   scene.add(secondLight);
 
   // Add a point light at the base for extra definition
-  const pointLight = new THREE.PointLight(0xcc88ff, 0.6, 10);
-  pointLight.position.set(0, 0, 0);
+  const pointLight = new THREE.PointLight(0xb388ff, 0.8, 40);
+  pointLight.position.set(0, 5, 0);
   scene.add(pointLight);
+
+  // Add a rim light to highlight edges
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+  rimLight.position.set(0, 10, -30);
+  scene.add(rimLight);
 }
 
 // Initialize grid
 function initGrid() {
   // Add grid for reference
   const gridHelper = new THREE.GridHelper(
-    20,
-    20,
+    100,
+    50,
     COLORS.gridCenter,
     COLORS.grid
   );
@@ -184,7 +202,7 @@ function initGrid() {
   scene.add(gridHelper);
 
   // Add axes helper for reference
-  const axesHelper = new THREE.AxesHelper(3);
+  const axesHelper = new THREE.AxesHelper(10);
   scene.add(axesHelper);
 }
 
@@ -222,17 +240,9 @@ function setupEventListeners() {
 }
 
 // Create disc-shaped servo joint oriented to its rotation axis
-function createServoJoint(radius, height, color, axis = "y") {
+function createServoJoint(radius, height, axis = "y") {
   const geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
-  const material = new THREE.MeshStandardMaterial({
-    color: color,
-    roughness: 0.2,
-    metalness: 0.9,
-    emissive: color,
-    emissiveIntensity: 0.4,
-  });
-
-  const cylinder = new THREE.Mesh(geometry, material);
+  const cylinder = new THREE.Mesh(geometry, MATERIALS.transparent);
 
   // Rotate cylinder to align with rotation axis
   if (axis === "x") {
@@ -252,7 +262,7 @@ function createRobot() {
   // Create base
   const baseGeometry = new THREE.CylinderGeometry(
     DIMENSIONS.baseRadius,
-    DIMENSIONS.baseRadius * 1.1,
+    DIMENSIONS.baseRadius * 1.2,
     DIMENSIONS.baseHeight,
     32
   );
@@ -269,14 +279,13 @@ function createRobot() {
 
   // Add a disc for the first servo joint (base yaw) - Y axis rotation
   const baseJoint = createServoJoint(
-    DIMENSIONS.jointRadius,
+    DIMENSIONS.jointRadius * 1.5,
     DIMENSIONS.jointThickness,
-    COLORS.joint,
     "y"
   );
   baseYawGroup.add(baseJoint);
 
-  // Create shorter cylinder for yaw servo
+  // Create cylinder for yaw servo - 4 units tall
   const yawCylinderGeometry = new THREE.CylinderGeometry(
     DIMENSIONS.yawRadius,
     DIMENSIONS.yawRadius,
@@ -295,14 +304,13 @@ function createRobot() {
 
   // Add a disc for the second servo joint (pitch 1) - X axis rotation
   const pitch1Joint = createServoJoint(
-    DIMENSIONS.jointRadius * 0.8,
+    DIMENSIONS.jointRadius * 1.3,
     DIMENSIONS.jointThickness,
-    COLORS.joint,
     "x"
   );
   pitch1Group.add(pitch1Joint);
 
-  // Create arm segment for pitch1
+  // Create arm segment for pitch1 - now 18 units long and 3 units thick
   const arm1Geometry = new THREE.BoxGeometry(
     DIMENSIONS.pitch1Width,
     DIMENSIONS.pitch1Length,
@@ -320,14 +328,13 @@ function createRobot() {
 
   // Add a disc for the third servo joint (pitch 2) - X axis rotation
   const pitch2Joint = createServoJoint(
-    DIMENSIONS.jointRadius * 0.7,
+    DIMENSIONS.jointRadius * 1.2,
     DIMENSIONS.jointThickness,
-    COLORS.joint,
     "x"
   );
   pitch2Group.add(pitch2Joint);
 
-  // Create arm segment for pitch2
+  // Create arm segment for pitch2 - now 18 units long and 3 units thick
   const arm2Geometry = new THREE.BoxGeometry(
     DIMENSIONS.pitch2Width,
     DIMENSIONS.pitch2Length,
@@ -345,14 +352,13 @@ function createRobot() {
 
   // Add a disc for the fourth servo joint (pitch 3) - X axis rotation
   const pitch3Joint = createServoJoint(
-    DIMENSIONS.jointRadius * 0.6,
+    DIMENSIONS.jointRadius,
     DIMENSIONS.jointThickness,
-    COLORS.joint,
     "x"
   );
   pitch3Group.add(pitch3Joint);
 
-  // Create arm segment for pitch3
+  // Create arm segment for pitch3 - now 5 units long and 3 units thick
   const arm3Geometry = new THREE.BoxGeometry(
     DIMENSIONS.pitch3Width,
     DIMENSIONS.pitch3Length,
@@ -364,7 +370,7 @@ function createRobot() {
   pitch3Group.add(arm3);
 
   // Add end effector at the tip of the last arm
-  const endEffectorGeometry = new THREE.SphereGeometry(0.25, 24, 24);
+  const endEffectorGeometry = new THREE.SphereGeometry(1.2, 24, 24);
   const endEffector = new THREE.Mesh(
     endEffectorGeometry,
     MATERIALS.endEffector
@@ -373,12 +379,12 @@ function createRobot() {
   endEffector.castShadow = true;
 
   // Add a small light at the end effector
-  const endEffectorLight = new THREE.PointLight(COLORS.endEffector, 1, 3);
+  const endEffectorLight = new THREE.PointLight(COLORS.endEffector, 2.0, 15);
   endEffectorLight.position.y = 0;
   endEffector.add(endEffectorLight);
 
   // Add glow effect around end effector
-  const glowGeometry = new THREE.SphereGeometry(0.35, 24, 24);
+  const glowGeometry = new THREE.SphereGeometry(1.8, 24, 24);
   const glowMesh = new THREE.Mesh(glowGeometry, MATERIALS.glow);
   endEffector.add(glowMesh);
 
