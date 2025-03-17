@@ -1,177 +1,256 @@
 import time
 import numpy as np
-import traceback
 import scservo_sdk as scs
-import serial
+import json
+import os
+import datetime
 
 PROTOCOL_VERSION = 0
 BAUDRATE = 1_000_000
 TIMEOUT_MS = 1000
-NUM_READ_RETRY = 20
-NUM_WRITE_RETRY = 20
-DEGREE_SCALING_FACTOR = 1.5
+NUM_RETRY = 10
 
-SCS_SERIES_CONTROL_TABLE = {
-    "Torque_Enable":          (40, 1),
-    "Goal_Position":          (42, 2),
-    "Present_Position":       (56, 2),
+SCS_CONTROL_TABLE = {
+    "Torque_Enable": (40, 1),
+    "Goal_Position": (42, 2),
+    "Present_Position": (56, 2),
 }
 
+CENTER_POSITION = 2048
 MODEL_RESOLUTION = 4096
 
-class FeetechController:
-    def __init__(self, port, servo_ids, virtual_port=False):
+class ServoController:
+    def __init__(self, port, servos):
         self.port = port
-        self.servo_ids = servo_ids
-        self.virtual_port = virtual_port
+        self.servos = servos
+        self.servo_names = list(servos.keys())
+        self.servo_ids = list(servos.values())
         
-        self.port_handler = None
-        self.packet_handler = None
-        self.is_connected = False
+        self._is_connected = False
+        self._readers = {}
+        self._writers = {}
         
-        self.group_readers = {}
-        self.group_writers = {}
+        self.calibration = {}
+        self.calibration_file = "servo_calibration.json"
+        
+        if os.path.exists(self.calibration_file):
+            try:
+                with open(self.calibration_file, 'r') as f:
+                    self.calibration = json.load(f)
+                print(f"Loaded calibration from {self.calibration_file}")
+            except Exception as e:
+                print(f"Error loading calibration: {e}")
 
     def connect(self):
-        if self.is_connected:
-            raise RuntimeError("Controller is already connected.")
-
+        if self._is_connected:
+            raise RuntimeError("Already connected")
+            
         self.port_handler = scs.PortHandler(self.port)
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
 
         try:
-            # Store the original setupPort method
-            original_setup_port = self.port_handler.setupPort
-            
-            def virtual_port_setup(cflag_baud):
-                if self.port_handler.is_open:
-                    self.port_handler.closePort()
-
-                self.port_handler.ser = serial.Serial(
-                    port=self.port_handler.port_name,
-                    # baudrate is intentionally not set here
-                    bytesize=serial.EIGHTBITS,
-                    timeout=0
-                )
-
-                self.port_handler.is_open = True
-                self.port_handler.ser.reset_input_buffer()
-                self.port_handler.tx_time_per_byte = (1000.0 / self.port_handler.baudrate) * 10.0
-                return True
-                
-            # Replace the setupPort method based on virtual_port setting
-            if self.virtual_port:
-                self.port_handler.setupPort = virtual_port_setup
-                print(f"[FeetechController] Using virtual port setup for {self.port}")
-            
             if not self.port_handler.openPort():
-                raise OSError(f"Failed to open port '{self.port}'.")
-
+                raise OSError(f"Failed to open port '{self.port}'")
+            
+            self.port_handler.setBaudRate(BAUDRATE)
             self.port_handler.setPacketTimeoutMillis(TIMEOUT_MS)
-            self.is_connected = True
-
-            print(f"[FeetechController] Connected on port={self.port} at baud={BAUDRATE}")
-
+            self._is_connected = True
+            print(f"Connected on port={self.port}")
+        
         except Exception as e:
-            traceback.print_exc()
-            if self.port_handler:
+            if hasattr(self, 'port_handler') and self.port_handler:
                 self.port_handler.closePort()
-            self.port_handler = None
-            self.packet_handler = None
             raise e
 
     def disconnect(self):
-        if not self.is_connected:
-            raise RuntimeError("Controller is not connected.")
-
-        if self.port_handler:
+        if not self._is_connected:
+            return
+            
+        if hasattr(self, 'port_handler') and self.port_handler:
             self.port_handler.closePort()
-            self.port_handler = None
+            
+        self._readers = {}
+        self._writers = {}
+        self._is_connected = False
+        print("Disconnected")
 
-        self.packet_handler = None
-        self.group_readers = {}
-        self.group_writers = {}
-        self.is_connected = False
-
-        print("[FeetechController] Disconnected.")
-
-    def read(self, data_name, servo_ids=None):
-        if not self.is_connected:
-            raise RuntimeError("Controller is not connected.")
-
-        if servo_ids is None:
-            servo_ids = self.servo_ids
-        if isinstance(servo_ids, int):
-            servo_ids = [servo_ids]
-
-        if data_name not in SCS_SERIES_CONTROL_TABLE:
-            raise ValueError(f"Unknown data_name '{data_name}' not in control table.")
-        addr, size = SCS_SERIES_CONTROL_TABLE[data_name]
-
-        group_key = f"{data_name}_{'_'.join(map(str, servo_ids))}"
-        if group_key not in self.group_readers:
-            self.port_handler.ser.reset_output_buffer()
-            self.port_handler.ser.reset_input_buffer()
-
-            self.group_readers[group_key] = scs.GroupSyncRead(self.port_handler, self.packet_handler, addr, size)
-            for servo_id in servo_ids:
-                self.group_readers[group_key].addParam(servo_id)
-
-        for _ in range(NUM_READ_RETRY):
-            comm_result = self.group_readers[group_key].txRxPacket()
-            if comm_result == scs.COMM_SUCCESS:
+    def calibrate(self):
+        if not self._is_connected:
+            self.connect()
+            
+        self._write("Torque_Enable", 0)
+        
+        for name, servo_id in self.servos.items():
+            servo_cal = {}
+            
+            print(f"\n--- Calibrating {name} (ID: {servo_id}) ---")
+            
+            input(f"Move servo to 0° position and press Enter...")
+            zero_pos = self._read("Present_Position", [servo_id])[0]
+            servo_cal["zero"] = int(zero_pos)
+            print(f"Set {zero_pos} as 0°")
+            
+            while True:
+                input(f"Move servo to +90° position and press Enter...")
+                pos_90_pos = self._read("Present_Position", [servo_id])[0]
+                
+                if abs(pos_90_pos - zero_pos) < 50:
+                    print(f"Warning: Position too close to 0°, try again")
+                    continue
+                
+                servo_cal["max"] = int(pos_90_pos)
+                print(f"Set {pos_90_pos} as +90°")
                 break
-        if comm_result != scs.COMM_SUCCESS:
-            raise RuntimeError(
-                f"[read] Communication error: {self.packet_handler.getTxRxResult(comm_result)}"
-            )
+            
+            while True:
+                input(f"Move servo to -90° position and press Enter...")
+                neg_90_pos = self._read("Present_Position", [servo_id])[0]
+                
+                if abs(neg_90_pos - zero_pos) < 50 or abs(neg_90_pos - pos_90_pos) < 50:
+                    print(f"Warning: Position too close to other positions, try again")
+                    continue
+                
+                servo_cal["min"] = int(neg_90_pos)
+                print(f"Set {neg_90_pos} as -90°")
+                break
+            
+            self.calibration[str(servo_id)] = servo_cal
+            print(f"Calibration complete for {name}")
+        
+        self.calibration["timestamp"] = datetime.datetime.now().isoformat()
+        try:
+            with open(self.calibration_file, 'w') as f:
+                json.dump(self.calibration, f, indent=2)
+            print(f"Saved calibration to {self.calibration_file}")
+        except Exception as e:
+            print(f"Error saving calibration: {e}")
+            
+        print("Calibration complete for all servos")
 
-        values = []
-        for servo_id in servo_ids:
-            val = self.group_readers[group_key].getData(servo_id, addr, size)
-            values.append(val)
+    def get_angles(self):
+        positions = self._read("Present_Position", self.servo_ids)
+        return {name: self._position_to_angle(pos, self.servos[name]) 
+                for name, pos in zip(self.servo_names, positions)}
 
-        return np.array(values, dtype=np.int32)
+    def move(self, angles):
+        positions = []
+        servo_ids = []
+        
+        for name, angle in angles.items():
+            if abs(angle) > 90:
+                raise ValueError(f"Angle {angle}° exceeds range of ±90°")
+            if name not in self.servos:
+                raise ValueError(f"Unknown servo: {name}")
+                
+            servo_id = self.servos[name]
+            position = self._angle_to_position(angle, servo_id)
+            positions.append(position)
+            servo_ids.append(servo_id)
+        
+        if positions:
+            self._write("Goal_Position", positions, servo_ids)
 
-    def write(self, data_name, values, servo_ids=None):
-        if not self.is_connected:
-            raise RuntimeError("Controller is not connected.")
+    def center(self):
+        self.move({name: 0 for name in self.servo_names})
 
-        if servo_ids is None:
-            servo_ids = self.servo_ids
+    def _angle_to_position(self, angle, servo_id):
+        str_id = str(servo_id)
+        
+        if str_id not in self.calibration:
+            return int(CENTER_POSITION + (angle * MODEL_RESOLUTION / 360))
+            
+        cal = self.calibration[str_id]
+        zero_pos = cal["zero"]
+        
+        if angle == 0:
+            return zero_pos
+        elif angle > 0:
+            pos_90_pos = cal["max"]
+            return int(zero_pos + (angle / 90) * (pos_90_pos - zero_pos))
+        else:
+            neg_90_pos = cal["min"]
+            return int(zero_pos + (angle / 90) * (zero_pos - neg_90_pos))
+
+    def _position_to_angle(self, position, servo_id):
+        str_id = str(servo_id)
+        
+        if str_id not in self.calibration:
+            return (position - CENTER_POSITION) * 360 / MODEL_RESOLUTION
+            
+        cal = self.calibration[str_id]
+        zero_pos = cal["zero"]
+        pos_90_pos = cal["max"]
+        neg_90_pos = cal["min"]
+        
+        if position >= zero_pos:
+            if position > pos_90_pos:
+                return 90
+            return 90 * (position - zero_pos) / (pos_90_pos - zero_pos)
+        else:
+            if position < neg_90_pos:
+                return -90
+            return 90 * (position - zero_pos) / (zero_pos - neg_90_pos)
+
+    def _read(self, data_name, servo_ids=None):
+        if not self._is_connected:
+            self.connect()
+
+        servo_ids = servo_ids or self.servo_ids
         if isinstance(servo_ids, int):
             servo_ids = [servo_ids]
 
+        addr, size = SCS_CONTROL_TABLE[data_name]
+        group_key = f"{data_name}_{'_'.join(map(str, servo_ids))}"
+        
+        if group_key not in self._readers:
+            reader = scs.GroupSyncRead(self.port_handler, self.packet_handler, addr, size)
+            for servo_id in servo_ids:
+                reader.addParam(servo_id)
+            self._readers[group_key] = reader
+
+        reader = self._readers[group_key]
+        for _ in range(NUM_RETRY):
+            if reader.txRxPacket() == scs.COMM_SUCCESS:
+                break
+        else:
+            raise RuntimeError("Communication error during read")
+
+        return np.array([reader.getData(id, addr, size) for id in servo_ids], dtype=np.int32)
+
+    def _write(self, data_name, values=None, servo_ids=None):
+        if not self._is_connected:
+            self.connect()
+
+        servo_ids = servo_ids or self.servo_ids
+        if isinstance(servo_ids, int):
+            servo_ids = [servo_ids]
+
+        if values is None:
+            values = [1] * len(servo_ids)
         if isinstance(values, (int, float, np.integer)):
             values = [values] * len(servo_ids)
+            
         values = np.array(values, dtype=np.int32)
-
-        if data_name not in SCS_SERIES_CONTROL_TABLE:
-            raise ValueError(f"Unknown data_name '{data_name}' not in control table.")
-        addr, size = SCS_SERIES_CONTROL_TABLE[data_name]
-
+        addr, size = SCS_CONTROL_TABLE[data_name]
         group_key = f"{data_name}_{'_'.join(map(str, servo_ids))}"
-        if group_key not in self.group_writers:
-            self.group_writers[group_key] = scs.GroupSyncWrite(self.port_handler, self.packet_handler, addr, size)
-
-            for servo_id, val in zip(servo_ids, values, strict=True):
-                data = self._convert_to_bytes(val, size)
-                self.group_writers[group_key].addParam(servo_id, data)
+        
+        if group_key not in self._writers:
+            writer = scs.GroupSyncWrite(self.port_handler, self.packet_handler, addr, size)
+            self._writers[group_key] = writer
+            for servo_id, val in zip(servo_ids, values):
+                writer.addParam(servo_id, self._to_bytes(val, size))
         else:
-            for servo_id, val in zip(servo_ids, values, strict=True):
-                data = self._convert_to_bytes(val, size)
-                self.group_writers[group_key].changeParam(servo_id, data)
+            writer = self._writers[group_key]
+            for servo_id, val in zip(servo_ids, values):
+                writer.changeParam(servo_id, self._to_bytes(val, size))
 
-        for _ in range(NUM_WRITE_RETRY):
-            comm_result = self.group_writers[group_key].txPacket()
-            if comm_result == scs.COMM_SUCCESS:
+        for _ in range(NUM_RETRY):
+            if writer.txPacket() == scs.COMM_SUCCESS:
                 break
-        if comm_result != scs.COMM_SUCCESS:
-            raise RuntimeError(
-                f"[write] Communication error: {self.packet_handler.getTxRxResult(comm_result)}"
-            )
+        else:
+            raise RuntimeError("Communication error during write")
 
-    def _convert_to_bytes(self, value, size):
+    def _to_bytes(self, value, size):
         if size == 1:
             return [value & 0xFF]
         elif size == 2:
@@ -184,72 +263,4 @@ class FeetechController:
                 ((value >> 24) & 0xFF),
             ]
         else:
-            raise ValueError(f"Unsupported size={size} for _convert_to_bytes")
-
-    def enable_torque(self, servo_ids=None):
-        if servo_ids is None:
-            servo_ids = self.servo_ids
-        self.write("Torque_Enable", 1, servo_ids)
-
-    def disable_torque(self, servo_ids=None):
-        if servo_ids is None:
-            servo_ids = self.servo_ids
-        self.write("Torque_Enable", 0, servo_ids)
-
-    def get_position(self, servo_id, retry_count=3):
-        for attempt in range(retry_count):
-            try:
-                val = self.read("Present_Position", servo_id)
-                if val.size > 0:
-                    return int(val[0])
-            except Exception as e:
-                if attempt < retry_count - 1:
-                    time.sleep(0.05)
-                else:
-                    print(f"[get_position] Failed reading servo {servo_id}: {e}")
-        return None
-
-    def get_all_positions(self):
-        vals = self.read("Present_Position")
-        return {servo_id: int(vals[i]) for i, servo_id in enumerate(self.servo_ids)}
-
-    def set_position(self, servo_id, position, retry_count=3):
-        for attempt in range(retry_count):
-            try:
-                self.write("Goal_Position", position, servo_id)
-                return
-            except Exception as e:
-                if attempt < retry_count - 1:
-                    time.sleep(0.05)
-                    print(f"[set_position] Retry {attempt+1}/{retry_count} for servo {servo_id}")
-                else:
-                    raise e
-
-    def set_all_positions(self, position, delay=0.1):
-        for servo_id in self.servo_ids:
-            self.set_position(servo_id, position)
-            time.sleep(delay)
-
-    def center_all(self):
-        self.write("Goal_Position", 2048, self.servo_ids)
-
-    def get_position_degrees(self, servo_id, retry_count=3):
-        raw_position = self.get_position(servo_id, retry_count)
-        if raw_position is None:
-            return None
-            
-        position_centered = raw_position - 2048
-        position_degrees = position_centered / 2048 * 120 * DEGREE_SCALING_FACTOR
-        
-        return position_degrees
-        
-    def get_all_positions_degrees(self):
-        raw_positions = self.get_all_positions()
-        degree_positions = {}
-        
-        for servo_id, raw_pos in raw_positions.items():
-            position_centered = raw_pos - 2048
-            position_degrees = position_centered / 2048 * 120 * DEGREE_SCALING_FACTOR
-            degree_positions[servo_id] = position_degrees
-            
-        return degree_positions
+            raise ValueError(f"Unsupported size: {size}")
