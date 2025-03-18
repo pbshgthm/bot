@@ -6,20 +6,20 @@
     <title>Robotic Arm Simulator</title>
     <style>
         :root {
-            --bg-dark: #1a1a1a;
-            --bg-medium: #242424;
-            --bg-light: #333333;
-            --accent: #7c4dff;
-            --accent-light: #b388ff;
-            --text-light: #FFFFFF;
-            --text-dim: #CCCCCC;
-            --primary: #29b6f6;
-            --primary-dark: #0091ea;
-            --success: #00E676;
-            --warning: #FFAB00;
-            --danger: #FF4081;
-            --track-color: #424242;
-            --border-radius: 8px;
+            --bg-dark: #121212;
+            --bg-medium: #1e1e1e;
+            --bg-light: #282828;
+            --accent: #555555;
+            --accent-light: #777777;
+            --text-light: #ffffff;
+            --text-dim: #bbbbbb;
+            --primary: #dddddd;
+            --primary-dark: #aaaaaa;
+            --success: #666666;
+            --warning: #888888;
+            --danger: #999999;
+            --track-color: #333333;
+            --border-radius: 4px;
         }
         
         * {
@@ -50,41 +50,40 @@
             padding: 20px;
             background-color: var(--bg-medium);
             overflow-y: auto;
-            box-shadow: -5px 0 15px rgba(0, 0, 0, 0.4);
-            min-width: 300px;
-            max-width: 380px;
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
+            min-width: 280px;
+            max-width: 350px;
             border-left: 1px solid var(--bg-light);
         }
         
         h2, h3 {
-            margin-bottom: 20px;
-            color: var(--primary);
+            margin-bottom: 15px;
+            color: var(--text-light);
             border-bottom: 1px solid var(--accent);
-            padding-bottom: 10px;
+            padding-bottom: 8px;
             font-weight: 400;
             letter-spacing: 0.5px;
-            text-shadow: 0 0 5px rgba(41, 182, 246, 0.4);
         }
         
         .slider-container {
-            margin-bottom: 25px;
+            margin-bottom: 20px;
             background-color: var(--bg-light);
-            padding: 20px;
+            padding: 15px;
             border-radius: var(--border-radius);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-            border: 1px solid rgba(124, 77, 255, 0.3);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(85, 85, 85, 0.2);
             transition: all 0.2s ease;
         }
         
         .slider-container:hover {
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(124, 77, 255, 0.5);
-            transform: translateY(-2px);
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(85, 85, 85, 0.3);
+            transform: translateY(-1px);
         }
         
         label {
             display: block;
-            margin-bottom: 15px;
+            margin-bottom: 10px;
             font-weight: bold;
             color: var(--text-light);
             letter-spacing: 0.5px;
@@ -93,76 +92,69 @@
         input[type="range"] {
             width: 100%;
             -webkit-appearance: none;
-            height: 10px;
+            height: 6px;
             background: var(--track-color);
-            border-radius: 5px;
+            border-radius: 3px;
             outline: none;
-            margin: 15px 0;
+            margin: 10px 0;
         }
         
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
-            width: 24px;
-            height: 24px;
+            width: 18px;
+            height: 18px;
             background: var(--primary);
             border-radius: 50%;
             cursor: pointer;
-            box-shadow: 0 0 10px rgba(41, 182, 246, 0.8);
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
         }
         
         input[type="range"]::-moz-range-thumb {
-            width: 24px;
-            height: 24px;
+            width: 18px;
+            height: 18px;
             background: var(--primary);
             border-radius: 50%;
             cursor: pointer;
             border: none;
-            box-shadow: 0 0 10px rgba(41, 182, 246, 0.8);
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
         }
         
         input[type="range"]:hover::-webkit-slider-thumb {
             background: var(--primary-dark);
-            box-shadow: 0 0 16px rgba(41, 182, 246, 1);
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
         }
         
         input[type="range"]:hover::-moz-range-thumb {
             background: var(--primary-dark);
-            box-shadow: 0 0 16px rgba(41, 182, 246, 1);
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
         }
         
         .value-display {
-            margin-top: 12px;
+            margin-top: 8px;
             text-align: center;
             font-family: monospace;
-            font-size: 20px;
+            font-size: 16px;
             color: var(--primary);
             font-weight: bold;
             letter-spacing: 1px;
-            text-shadow: 0 0 8px rgba(41, 182, 246, 0.6);
         }
         
         #server-status {
-            margin-top: 30px;
-            padding: 20px;
+            margin-top: 20px;
+            padding: 15px;
             background-color: var(--bg-light);
             border-radius: var(--border-radius);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-            border: 1px solid rgba(124, 77, 255, 0.3);
-            transition: all 0.2s ease;
-        }
-        
-        #server-status:hover {
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(124, 77, 255, 0.5);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(85, 85, 85, 0.2);
         }
         
         .status-item {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px dashed rgba(124, 77, 255, 0.3);
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(85, 85, 85, 0.2);
         }
         
         .status-label {
@@ -178,25 +170,25 @@
         .server-response {
             background-color: var(--bg-dark);
             border: 1px solid var(--accent);
-            border-radius: 4px;
-            padding: 12px;
-            margin-top: 10px;
+            border-radius: var(--border-radius);
+            padding: 10px;
+            margin-top: 8px;
             font-family: 'Courier New', monospace;
             font-size: 12px;
-            max-height: 120px;
+            max-height: 100px;
             overflow-y: auto;
             color: var(--text-light);
         }
         
         .action-buttons {
             display: flex;
-            gap: 15px;
-            margin-top: 25px;
-            margin-bottom: 25px;
+            gap: 10px;
+            margin-top: 20px;
+            margin-bottom: 20px;
         }
         
         button {
-            padding: 16px 20px;
+            padding: 12px 16px;
             background-color: var(--accent);
             color: white;
             border: none;
@@ -205,7 +197,7 @@
             font-weight: bold;
             transition: all 0.2s ease;
             flex: 1;
-            box-shadow: 0 4px 12px rgba(124, 77, 255, 0.5);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
             text-transform: uppercase;
             letter-spacing: 1px;
             font-size: 0.85em;
@@ -213,25 +205,25 @@
         
         button:hover {
             background-color: var(--accent-light);
-            box-shadow: 0 6px 16px rgba(124, 77, 255, 0.7);
-            transform: translateY(-2px);
+            box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+            transform: translateY(-1px);
         }
         
         button:active {
             transform: translateY(1px);
-            box-shadow: 0 2px 4px rgba(124, 77, 255, 0.5);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
         }
         
         .servo-label {
             display: inline-block;
             background-color: var(--accent);
-            padding: 6px 12px;
-            border-radius: 20px;
-            margin-right: 10px;
+            padding: 4px 8px;
+            border-radius: 3px;
+            margin-right: 8px;
             font-size: 0.8em;
             color: var(--text-light);
             vertical-align: middle;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
         }
         
         /* Loading animation for connecting state */
@@ -254,28 +246,26 @@
         
         /* Status indicators */
         .connected {
-            color: var(--success) !important;
-            text-shadow: 0 0 5px rgba(0, 230, 118, 0.5);
+            color: #ffffff !important;
         }
         
         .disconnected {
-            color: var(--danger) !important;
-            text-shadow: 0 0 5px rgba(255, 64, 129, 0.5);
+            color: #aaaaaa !important;
         }
         
         /* Scrollbar styling */
         ::-webkit-scrollbar {
-            width: 8px;
+            width: 6px;
         }
         
         ::-webkit-scrollbar-track {
             background: var(--bg-medium);
-            border-radius: 4px;
+            border-radius: 3px;
         }
         
         ::-webkit-scrollbar-thumb {
             background: var(--accent);
-            border-radius: 4px;
+            border-radius: 3px;
         }
         
         ::-webkit-scrollbar-thumb:hover {
@@ -309,6 +299,18 @@
             <label for="pitch3"><span class="servo-label">ID: 4</span>Segment 3</label>
             <input type="range" id="pitch3" min="-90" max="90" value="0" step="1">
             <div class="value-display" id="pitch3-value">0°</div>
+        </div>
+        
+        <div class="slider-container">
+            <label for="roll"><span class="servo-label">ID: 5</span>Roll</label>
+            <input type="range" id="roll" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="roll-value">0°</div>
+        </div>
+        
+        <div class="slider-container">
+            <label for="pitch4"><span class="servo-label">ID: 6</span>Gripper</label>
+            <input type="range" id="pitch4" min="-90" max="90" value="0" step="1">
+            <div class="value-display" id="pitch4-value">0°</div>
         </div>
         
         <div class="action-buttons">

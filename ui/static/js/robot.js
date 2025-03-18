@@ -1,6 +1,11 @@
 // Global variables and constants
 let scene, camera, renderer, controls;
-let baseYawGroup, pitch1Group, pitch2Group, pitch3Group;
+let baseYawGroup,
+  pitch1Group,
+  pitch2Group,
+  pitch3Group,
+  rollGroup,
+  gripperGroup;
 
 // Color scheme - improved color contrast and visibility
 const COLORS = {
@@ -86,6 +91,15 @@ const DIMENSIONS = {
 
   pitch3Length: 5.0, // Fourth segment 5 units
   pitch3Width: 3.0, // Increased to 3 units thick
+
+  rollLength: 4.0, // Length for the roll section
+  rollWidth: 3.0, // Width for the roll section
+
+  gripperLength: 3.0, // Length of gripper housing
+  gripperWidth: 2.5, // Width of gripper housing
+  gripperFingerLength: 2.0, // Length of gripper fingers
+  gripperFingerWidth: 0.8, // Width of gripper fingers
+  gripperOpenAngle: 30, // Angle in degrees for open gripper
 
   jointRadius: 2.0, // Larger joints
   jointThickness: 0.6,
@@ -225,6 +239,16 @@ function setupEventListeners() {
   const pitch3Slider = document.getElementById("pitch3");
   if (pitch3Slider) {
     pitch3Slider.addEventListener("input", handlePitch3SliderInput);
+  }
+
+  const rollSlider = document.getElementById("roll");
+  if (rollSlider) {
+    rollSlider.addEventListener("input", handleRollSliderInput);
+  }
+
+  const gripperSlider = document.getElementById("pitch4");
+  if (gripperSlider) {
+    gripperSlider.addEventListener("input", handleGripperSliderInput);
   }
 
   // Add button event listeners
@@ -371,29 +395,122 @@ function createRobot() {
 
   // Add end effector at the tip of the last arm
   const endEffectorGeometry = new THREE.SphereGeometry(1.2, 24, 24);
-  const endEffector = new THREE.Mesh(
-    endEffectorGeometry,
+
+  // Create a group for the roll servo assembly (servo 5)
+  rollGroup = new THREE.Group();
+  rollGroup.position.y = DIMENSIONS.pitch3Length; // Position at end of pitch3 arm
+  pitch3Group.add(rollGroup);
+
+  // Add a disc for roll joint - Y axis rotation
+  const rollJoint = createServoJoint(
+    DIMENSIONS.jointRadius * 0.9,
+    DIMENSIONS.jointThickness,
+    "y" // Y-axis for roll around the arm's length
+  );
+  rollGroup.add(rollJoint);
+
+  // Add visual indicators for roll rotation
+  // Create a cylindrical housing for the roll section
+  const rollHousingGeometry = new THREE.CylinderGeometry(
+    DIMENSIONS.rollWidth / 2,
+    DIMENSIONS.rollWidth / 2,
+    DIMENSIONS.rollLength,
+    16
+  );
+  const rollHousing = new THREE.Mesh(rollHousingGeometry, MATERIALS.servo);
+  rollHousing.position.y = DIMENSIONS.rollLength / 2;
+  rollHousing.castShadow = true;
+  rollGroup.add(rollHousing);
+
+  // Add directional markers on the roll housing to show rotation
+  const markerGeometry = new THREE.BoxGeometry(0.4, 0.2, 2.5);
+  const markerMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff3333, // Red marker
+    roughness: 0.3,
+    metalness: 0.8,
+    emissive: 0xff3333,
+    emissiveIntensity: 0.5,
+  });
+
+  // Add multiple markers around the roll cylinder
+  const marker1 = new THREE.Mesh(markerGeometry, markerMaterial);
+  marker1.position.set(
+    0,
+    DIMENSIONS.rollLength / 2,
+    DIMENSIONS.rollWidth / 2 + 0.01
+  );
+  rollHousing.add(marker1);
+
+  const marker2 = new THREE.Mesh(markerGeometry, markerMaterial);
+  marker2.position.set(
+    0,
+    DIMENSIONS.rollLength / 2,
+    -(DIMENSIONS.rollWidth / 2 + 0.01)
+  );
+  marker2.rotation.x = Math.PI;
+  rollHousing.add(marker2);
+
+  // Create a group for the gripper assembly (servo 6)
+  gripperGroup = new THREE.Group();
+  gripperGroup.position.y = DIMENSIONS.rollLength;
+  rollGroup.add(gripperGroup);
+
+  // Add a housing for the gripper
+  const gripperHousingGeometry = new THREE.BoxGeometry(
+    DIMENSIONS.gripperWidth,
+    DIMENSIONS.gripperLength,
+    DIMENSIONS.gripperWidth
+  );
+  const gripperHousing = new THREE.Mesh(
+    gripperHousingGeometry,
+    MATERIALS.servo
+  );
+  gripperHousing.position.y = DIMENSIONS.gripperLength / 2;
+  gripperHousing.castShadow = true;
+  gripperGroup.add(gripperHousing);
+
+  // Create left gripper finger
+  const leftFingerGeometry = new THREE.BoxGeometry(
+    DIMENSIONS.gripperFingerWidth,
+    DIMENSIONS.gripperFingerLength,
+    DIMENSIONS.gripperFingerWidth
+  );
+  const leftFinger = new THREE.Mesh(leftFingerGeometry, MATERIALS.endEffector);
+  leftFinger.position.set(
+    -DIMENSIONS.gripperWidth / 2 - DIMENSIONS.gripperFingerWidth / 2,
+    DIMENSIONS.gripperLength / 2,
+    0
+  );
+  leftFinger.castShadow = true;
+  gripperGroup.add(leftFinger);
+
+  // Create right gripper finger
+  const rightFingerGeometry = new THREE.BoxGeometry(
+    DIMENSIONS.gripperFingerWidth,
+    DIMENSIONS.gripperFingerLength,
+    DIMENSIONS.gripperFingerWidth
+  );
+  const rightFinger = new THREE.Mesh(
+    rightFingerGeometry,
     MATERIALS.endEffector
   );
-  endEffector.position.y = DIMENSIONS.pitch3Length; // Top of the arm
-  endEffector.castShadow = true;
+  rightFinger.position.set(
+    DIMENSIONS.gripperWidth / 2 + DIMENSIONS.gripperFingerWidth / 2,
+    DIMENSIONS.gripperLength / 2,
+    0
+  );
+  rightFinger.castShadow = true;
+  gripperGroup.add(rightFinger);
 
-  // Add a small light at the end effector
-  const endEffectorLight = new THREE.PointLight(COLORS.endEffector, 2.0, 15);
-  endEffectorLight.position.y = 0;
-  endEffector.add(endEffectorLight);
-
-  // Add glow effect around end effector
-  const glowGeometry = new THREE.SphereGeometry(1.8, 24, 24);
-  const glowMesh = new THREE.Mesh(glowGeometry, MATERIALS.glow);
-  endEffector.add(glowMesh);
-
-  pitch3Group.add(endEffector);
+  // Store references to gripper fingers for animation
+  gripperGroup.leftFinger = leftFinger;
+  gripperGroup.rightFinger = rightFinger;
 
   // Initial rotations
   pitch1Group.rotation.x = 0; // Start pointing up
   pitch2Group.rotation.x = Math.PI / 2; // At 0 degrees, perpendicular to pitch1
   pitch3Group.rotation.x = 0; // Perpendicular to pitch2 at 0
+  rollGroup.rotation.y = 0; // No roll initially
 
   console.log("Robot created");
 }
@@ -430,6 +547,22 @@ function handlePitch3SliderInput(event) {
   updateServoPosition("pitch3", value);
 }
 
+// Handle roll slider input
+function handleRollSliderInput(event) {
+  const value = parseFloat(event.target.value);
+  document.getElementById("roll-value").textContent = value + "°";
+  rotateRollServo(value);
+  updateServoPosition("pitch4", value);
+}
+
+// Handle gripper slider input
+function handleGripperSliderInput(event) {
+  const value = parseFloat(event.target.value);
+  document.getElementById("pitch4-value").textContent = value + "°";
+  moveGripper(value);
+  updateServoPosition("pitch5", value);
+}
+
 // Servo rotation functions
 function rotateYawServo(degrees) {
   if (!baseYawGroup) return;
@@ -456,6 +589,31 @@ function rotatePitch3Servo(degrees) {
   pitch3Group.rotation.x = radians;
 }
 
+// Roll rotation function
+function rotateRollServo(degrees) {
+  if (!rollGroup) return;
+  const radians = (degrees * Math.PI) / 180;
+  rollGroup.rotation.y = radians;
+}
+
+// Gripper movement function
+function moveGripper(value) {
+  if (!gripperGroup || !gripperGroup.leftFinger || !gripperGroup.rightFinger)
+    return;
+
+  // Map the -90 to 90 range to gripper positions
+  // 0 is closed, negative values open one way, positive values open the other way
+  const openAmount = Math.abs(value) / 90; // 0 to 1 based on slider position
+
+  // Position the fingers
+  const offset =
+    DIMENSIONS.gripperWidth / 2 + DIMENSIONS.gripperFingerWidth / 2;
+  const openOffset = offset + openAmount * DIMENSIONS.gripperFingerWidth * 1.5;
+
+  gripperGroup.leftFinger.position.x = -openOffset;
+  gripperGroup.rightFinger.position.x = openOffset;
+}
+
 // Center all servos
 function centerServos() {
   console.log("Centering all servos");
@@ -463,12 +621,16 @@ function centerServos() {
   updateSliderValue("pitch", 0);
   updateSliderValue("pitch2", 0);
   updateSliderValue("pitch3", 0);
+  updateSliderValue("roll", 0);
+  updateSliderValue("pitch4", 0); // Gripper slider
 
   // Update 3D model
   rotateYawServo(0);
   rotatePitch1Servo(0);
   rotatePitch2Servo(0);
   rotatePitch3Servo(0);
+  rotateRollServo(0);
+  moveGripper(0); // Close gripper
 
   // Send to server
   fetch("/api/servo/center", {
@@ -537,6 +699,16 @@ function fetchServoPositions() {
       if (data.pitch3 !== undefined) {
         updateSliderValue("pitch3", data.pitch3);
         rotatePitch3Servo(data.pitch3);
+      }
+
+      if (data.pitch4 !== undefined) {
+        updateSliderValue("roll", data.pitch4);
+        rotateRollServo(data.pitch4);
+      }
+
+      if (data.pitch5 !== undefined) {
+        updateSliderValue("pitch4", data.pitch5);
+        moveGripper(data.pitch5);
       }
     })
     .catch((error) => {

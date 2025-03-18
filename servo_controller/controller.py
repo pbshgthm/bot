@@ -94,6 +94,7 @@ class ServoController:
             return
         
         self._write("Torque_Enable", 0)
+        time.sleep(0.1)
             
         if hasattr(self, 'port_handler') and self.port_handler:
             self.port_handler.closePort()

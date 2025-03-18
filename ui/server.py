@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
 Main server for the servo control system.
+Controls six servos (1-6) for a robotic arm:
+- Servo 1: Base rotation (yaw)
+- Servo 2: Segment 1 (pitch)
+- Servo 3: Segment 2 (pitch)
+- Servo 4: Segment 3 (pitch)
+- Servo 5: Roll
+- Servo 6: End effector (pitch)
 """
 from flask import Flask, render_template, request, jsonify
 import time
