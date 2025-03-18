@@ -14,10 +14,12 @@ SCS_CONTROL_TABLE = {
     "Torque_Enable": (40, 1),
     "Goal_Position": (42, 2),
     "Present_Position": (56, 2),
+    "Moving_Speed": (46, 2),  # Add speed control
 }
 
 CENTER_POSITION = 2048
 MODEL_RESOLUTION = 4096
+DEFAULT_SPEED = 100  # Default speed value (0-1023)
 
 class ServoController:
     def __init__(self, port=None, servos=None):
@@ -157,12 +159,19 @@ class ServoController:
             
         print("Calibration complete for all servos")
 
+    def get_positions(self):
+        """Get the current raw positions of all servos."""
+        positions = self._read("Present_Position", self.servo_ids)
+        return {name: int(pos) for name, pos in zip(self.servo_names, positions)}
+
     def get_angles(self):
+        """Get the current angles of all servos."""
         positions = self._read("Present_Position", self.servo_ids)
         return {name: self._position_to_angle(pos, self.servos[name]) 
                 for name, pos in zip(self.servo_names, positions)}
 
-    def move(self, angles):
+    def move(self, angles, speed=None):
+        """Move servos to specified angles."""
         positions = []
         servo_ids = []
         
@@ -178,9 +187,42 @@ class ServoController:
             servo_ids.append(servo_id)
         
         if positions:
+            # Set speed if provided
+            if speed is not None:
+                speed = max(1, min(1023, speed))  # Clamp speed between 1-1023
+                self._write("Moving_Speed", speed)
+                
             self._write("Goal_Position", positions, servo_ids)
 
+    def move_to_positions(self, positions, speed=None):
+        """Move servos directly to specified raw positions."""
+        pos_values = []
+        servo_ids = []
+        
+        for name, position in positions.items():
+            if name not in self.servos:
+                raise ValueError(f"Unknown servo: {name}")
+                
+            servo_id = self.servos[name]
+            pos_values.append(int(position))
+            servo_ids.append(servo_id)
+        
+        if pos_values:
+            # Set speed if provided
+            if speed is not None:
+                speed = max(1, min(1023, speed))  # Clamp speed between 1-1023
+                self._write("Moving_Speed", speed)
+                
+            self._write("Goal_Position", pos_values, servo_ids)
+
+    def set_speed(self, speed):
+        """Set the movement speed for all servos (1-1023)."""
+        speed = max(1, min(1023, speed))  # Clamp between 1-1023
+        self._write("Moving_Speed", speed)
+        return speed
+
     def center(self):
+        """Move all servos to their center (0°) position."""
         self.move({name: 0 for name in self.servo_names})
 
     def _angle_to_position(self, angle, servo_id):
