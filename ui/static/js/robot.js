@@ -9,17 +9,18 @@ let baseYawGroup,
 
 // Color scheme - improved color contrast and visibility
 const COLORS = {
-  background: 0x1a1a1a, // Dark gray background
-  base: 0x455a64, // Darker blue/gray for base
-  servo: 0x5c6bc0, // Brighter indigo for servo cylinders
-  joint: 0x29b6f6, // Bright blue for joints
-  arm: 0x9575cd, // Lighter purple for arms - better contrast
-  endEffector: 0xff9800, // Brighter orange for end effector
-  grid: 0x212121, // Dark gray for grid
-  gridCenter: 0x424242, // Medium gray for grid center
-  glow: 0xb388ff, // Brighter purple glow
-  transparent: 0x80deea, // Transparent cyan for rotation discs
-  highlight: 0xd1c4e9, // Highlight color for edges
+  background: 0x121212, // Darker background
+  base: 0x37474f, // Dark blue-gray for base
+  servo: 0x3949ab, // Deeper indigo for servo cylinders
+  joint: 0x039be5, // Brighter blue for joints
+  arm: 0x7e57c2, // Richer purple for arms
+  endEffector: 0xff5722, // Vibrant orange for end effector
+  grid: 0x1a1a1a, // Very dark gray for grid
+  gridCenter: 0x333333, // Darker grid center
+  glow: 0x7c4dff, // Rich purple glow
+  transparent: 0x4fc3f7, // Brighter transparent cyan for rotation discs
+  highlight: 0xb39ddb, // Softer highlight color
+  clawTip: 0xe65100, // Orange-red for claw tips
 };
 
 // Material definitions with better contrast and glow
@@ -72,6 +73,13 @@ const MATERIALS = {
     metalness: 0.9,
     emissive: COLORS.transparent,
     emissiveIntensity: 0.3,
+  }),
+  clawTip: new THREE.MeshStandardMaterial({
+    color: COLORS.clawTip,
+    roughness: 0.2,
+    metalness: 0.9,
+    emissive: COLORS.clawTip,
+    emissiveIntensity: 0.5,
   }),
 };
 
@@ -393,19 +401,16 @@ function createRobot() {
   arm3.castShadow = true;
   pitch3Group.add(arm3);
 
-  // Add end effector at the tip of the last arm
-  const endEffectorGeometry = new THREE.SphereGeometry(1.2, 24, 24);
-
   // Create a group for the roll servo assembly (servo 5)
   rollGroup = new THREE.Group();
   rollGroup.position.y = DIMENSIONS.pitch3Length; // Position at end of pitch3 arm
   pitch3Group.add(rollGroup);
 
-  // Add a disc for roll joint - Y axis rotation
+  // Add a disc for roll joint - X axis rotation (changed from Y to X)
   const rollJoint = createServoJoint(
     DIMENSIONS.jointRadius * 0.9,
     DIMENSIONS.jointThickness,
-    "y" // Y-axis for roll around the arm's length
+    "y" // Changed to Y-axis for roll to be perpendicular to pitch3
   );
   rollGroup.add(rollJoint);
 
@@ -419,6 +424,8 @@ function createRobot() {
   );
   const rollHousing = new THREE.Mesh(rollHousingGeometry, MATERIALS.servo);
   rollHousing.position.y = DIMENSIONS.rollLength / 2;
+  // Rotate cylinder to align with arm direction
+  rollHousing.rotation.z = 0; // Reset rotation
   rollHousing.castShadow = true;
   rollGroup.add(rollHousing);
 
@@ -439,6 +446,8 @@ function createRobot() {
     DIMENSIONS.rollLength / 2,
     DIMENSIONS.rollWidth / 2 + 0.01
   );
+  // Adjust marker rotation
+  marker1.rotation.z = 0; // Reset rotation
   rollHousing.add(marker1);
 
   const marker2 = new THREE.Mesh(markerGeometry, markerMaterial);
@@ -447,12 +456,15 @@ function createRobot() {
     DIMENSIONS.rollLength / 2,
     -(DIMENSIONS.rollWidth / 2 + 0.01)
   );
+  // Adjust marker rotation
+  marker2.rotation.z = 0; // Reset rotation
   marker2.rotation.x = Math.PI;
   rollHousing.add(marker2);
 
   // Create a group for the gripper assembly (servo 6)
   gripperGroup = new THREE.Group();
-  gripperGroup.position.y = DIMENSIONS.rollLength;
+  gripperGroup.position.y = DIMENSIONS.rollLength; // Position at end of roll housing
+  gripperGroup.position.x = 0; // Reset X position
   rollGroup.add(gripperGroup);
 
   // Add a housing for the gripper
@@ -469,48 +481,60 @@ function createRobot() {
   gripperHousing.castShadow = true;
   gripperGroup.add(gripperHousing);
 
-  // Create left gripper finger
-  const leftFingerGeometry = new THREE.BoxGeometry(
-    DIMENSIONS.gripperFingerWidth,
-    DIMENSIONS.gripperFingerLength,
-    DIMENSIONS.gripperFingerWidth
-  );
-  const leftFinger = new THREE.Mesh(leftFingerGeometry, MATERIALS.endEffector);
-  leftFinger.position.set(
-    -DIMENSIONS.gripperWidth / 2 - DIMENSIONS.gripperFingerWidth / 2,
-    DIMENSIONS.gripperLength / 2,
-    0
-  );
-  leftFinger.castShadow = true;
-  gripperGroup.add(leftFinger);
+  // Create claw grippers instead of simple boxes
+  function createClaw(isLeft) {
+    const fingerGroup = new THREE.Group();
+    const multiplier = isLeft ? -1 : 1;
 
-  // Create right gripper finger
-  const rightFingerGeometry = new THREE.BoxGeometry(
-    DIMENSIONS.gripperFingerWidth,
-    DIMENSIONS.gripperFingerLength,
-    DIMENSIONS.gripperFingerWidth
-  );
-  const rightFinger = new THREE.Mesh(
-    rightFingerGeometry,
-    MATERIALS.endEffector
-  );
-  rightFinger.position.set(
-    DIMENSIONS.gripperWidth / 2 + DIMENSIONS.gripperFingerWidth / 2,
-    DIMENSIONS.gripperLength / 2,
-    0
-  );
-  rightFinger.castShadow = true;
-  gripperGroup.add(rightFinger);
+    // Base part of the claw
+    const baseGeometry = new THREE.BoxGeometry(
+      DIMENSIONS.gripperFingerWidth,
+      DIMENSIONS.gripperFingerLength * 0.7,
+      DIMENSIONS.gripperFingerWidth
+    );
+    const base = new THREE.Mesh(baseGeometry, MATERIALS.endEffector);
+    base.position.y = DIMENSIONS.gripperFingerLength * 0.35;
+    fingerGroup.add(base);
 
-  // Store references to gripper fingers for animation
-  gripperGroup.leftFinger = leftFinger;
-  gripperGroup.rightFinger = rightFinger;
+    // Angled part of the claw
+    const tipGeometry = new THREE.ConeGeometry(
+      DIMENSIONS.gripperFingerWidth * 0.5,
+      DIMENSIONS.gripperFingerLength * 0.6,
+      8
+    );
+    const tip = new THREE.Mesh(tipGeometry, MATERIALS.clawTip);
+    tip.position.y = DIMENSIONS.gripperFingerLength * 0.95;
+    tip.position.x = DIMENSIONS.gripperFingerWidth * 0.4 * multiplier;
+    tip.rotation.z = Math.PI * 0.15 * -multiplier;
+    fingerGroup.add(tip);
 
-  // Initial rotations
-  pitch1Group.rotation.x = 0; // Start pointing up
-  pitch2Group.rotation.x = Math.PI / 2; // At 0 degrees, perpendicular to pitch1
-  pitch3Group.rotation.x = 0; // Perpendicular to pitch2 at 0
-  rollGroup.rotation.y = 0; // No roll initially
+    // Position the entire claw
+    fingerGroup.position.set(
+      multiplier *
+        (DIMENSIONS.gripperWidth / 2 + DIMENSIONS.gripperFingerWidth / 2),
+      DIMENSIONS.gripperLength / 2,
+      0
+    );
+
+    return fingerGroup;
+  }
+
+  // Create left and right claws
+  const leftClaw = createClaw(true);
+  const rightClaw = createClaw(false);
+  gripperGroup.add(leftClaw);
+  gripperGroup.add(rightClaw);
+
+  // Store references to gripper parts for animation
+  gripperGroup.leftClaw = leftClaw;
+  gripperGroup.rightClaw = rightClaw;
+
+  // Initial rotations to match specified coordinate system
+  baseYawGroup.rotation.y = 0; // Default yaw - facing X axis
+  pitch1Group.rotation.x = 0; // Default pitch1 - pointing along Y axis
+  pitch2Group.rotation.x = Math.PI / 2; // Default pitch2 - perpendicular to pitch1
+  pitch3Group.rotation.x = 0; // Default pitch3 - will be adjusted in rotation function
+  rollGroup.rotation.y = 0; // Default roll - no rotation
 
   console.log("Robot created");
 }
@@ -573,45 +597,55 @@ function rotateYawServo(degrees) {
 function rotatePitch1Servo(degrees) {
   if (!pitch1Group) return;
   const radians = (degrees * Math.PI) / 180;
-  pitch1Group.rotation.x = radians;
+  // At 0°, arm points along Y axis, +90° points at X, -90° points at -X
+  pitch1Group.rotation.x = -radians; // Negative to match the specified orientation
 }
 
 function rotatePitch2Servo(degrees) {
   if (!pitch2Group) return;
+  // For pitch2: 0° is perpendicular to pitch1, 90° is opposite to pitch1, -90° is same as pitch1
   const radians = (degrees * Math.PI) / 180;
-  // Special rotation for pitch2: 0° is perpendicular to pitch1
+  // Start from perpendicular (90°) and adjust based on input
   pitch2Group.rotation.x = Math.PI / 2 - radians;
 }
 
 function rotatePitch3Servo(degrees) {
   if (!pitch3Group) return;
+  // For pitch3: when pitch2 is at 90°, 0° points along X, 90° along -Y, -90° along Y
   const radians = (degrees * Math.PI) / 180;
-  pitch3Group.rotation.x = radians;
+  pitch3Group.rotation.x = -radians; // Negative to match the described orientation
 }
 
 // Roll rotation function
 function rotateRollServo(degrees) {
   if (!rollGroup) return;
   const radians = (degrees * Math.PI) / 180;
+  // Roll axis is perpendicular to pitch3
   rollGroup.rotation.y = radians;
 }
 
-// Gripper movement function
+// Gripper movement function - improved to look more like a claw movement
 function moveGripper(value) {
-  if (!gripperGroup || !gripperGroup.leftFinger || !gripperGroup.rightFinger)
+  if (!gripperGroup || !gripperGroup.leftClaw || !gripperGroup.rightClaw)
     return;
 
   // Map the -90 to 90 range to gripper positions
-  // 0 is closed, negative values open one way, positive values open the other way
   const openAmount = Math.abs(value) / 90; // 0 to 1 based on slider position
 
-  // Position the fingers
-  const offset =
+  // Position the claws
+  const baseOffset =
     DIMENSIONS.gripperWidth / 2 + DIMENSIONS.gripperFingerWidth / 2;
-  const openOffset = offset + openAmount * DIMENSIONS.gripperFingerWidth * 1.5;
+  const openOffset =
+    baseOffset + openAmount * DIMENSIONS.gripperFingerWidth * 2.5;
 
-  gripperGroup.leftFinger.position.x = -openOffset;
-  gripperGroup.rightFinger.position.x = openOffset;
+  // Move claws apart
+  gripperGroup.leftClaw.position.x = -openOffset;
+  gripperGroup.rightClaw.position.x = openOffset;
+
+  // Add rotation to the claws when opening/closing
+  const rotationAmount = openAmount * Math.PI * 0.2;
+  gripperGroup.leftClaw.rotation.z = -rotationAmount;
+  gripperGroup.rightClaw.rotation.z = rotationAmount;
 }
 
 // Center all servos
