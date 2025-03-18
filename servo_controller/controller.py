@@ -15,6 +15,14 @@ SCS_CONTROL_TABLE = {
     "Goal_Position": (42, 2),
     "Present_Position": (56, 2),
     "Moving_Speed": (46, 2),  # Add speed control
+    # Added entries for servo configuration
+    "Mode": (33, 1),
+    "P_Coefficient": (21, 1),
+    "I_Coefficient": (23, 1),
+    "D_Coefficient": (22, 1),
+    "Lock": (55, 1),
+    "Maximum_Acceleration": (85, 2),
+    "Acceleration": (41, 1),
 }
 
 CENTER_POSITION = 2048
@@ -22,7 +30,7 @@ MODEL_RESOLUTION = 4096
 DEFAULT_SPEED = 100  # Default speed value (0-1023)
 
 class ServoController:
-    def __init__(self, port=None, servos=None):
+    def __init__(self, port=None, servos=None, auto_configure=True, p_coef=16, i_coef=0, d_coef=32, max_accel=254, accel=254):
         # Load config file
         self.config_file = os.path.join(os.path.dirname(__file__), "config.json")
         self.config = self._load_config()
@@ -54,6 +62,11 @@ class ServoController:
                 print(f"Loaded calibration from {self.calibration_file}")
             except Exception as e:
                 print(f"Error loading calibration: {e}")
+                
+        # Automatically connect and configure servos if requested
+        if auto_configure:
+            self.connect()
+            self.configure_servos(p_coef, i_coef, d_coef, max_accel, accel)
     
     def _load_config(self):
         """Load configuration from config.json file."""
@@ -72,7 +85,8 @@ class ServoController:
 
     def connect(self):
         if self._is_connected:
-            raise RuntimeError("Already connected")
+            print("Already connected, skipping connection")
+            return
             
         self.port_handler = scs.PortHandler(self.port)
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
@@ -169,6 +183,40 @@ class ServoController:
         positions = self._read("Present_Position", self.servo_ids)
         return {name: self._position_to_angle(pos, self.servos[name]) 
                 for name, pos in zip(self.servo_names, positions)}
+
+    def configure_servos(self, p_coef=16, i_coef=0, d_coef=32, max_accel=254, accel=254):
+        """Configure servo parameters for optimal performance.
+        
+        Args:
+            p_coef: P coefficient for position control (Default: 16)
+            i_coef: I coefficient for position control (Default: 0)
+            d_coef: D coefficient for position control (Default: 32)
+            max_accel: Maximum acceleration (Default: 254)
+            accel: Acceleration (Default: 254)
+        """
+        if not self._is_connected:
+            self.connect()
+            
+        # Enable torque first to ensure servos are active
+        self._write("Torque_Enable", 1)
+        
+        for servo_id in self.servo_ids:
+            # Set to Position Control mode
+            self._write("Mode", 0, servo_id)
+            
+            # Set PID coefficients
+            self._write("P_Coefficient", p_coef, servo_id)
+            self._write("I_Coefficient", i_coef, servo_id)
+            self._write("D_Coefficient", d_coef, servo_id)
+            
+            # Disable the write lock to allow writing to EEPROM
+            self._write("Lock", 0, servo_id)
+            
+            # Set acceleration parameters
+            self._write("Maximum_Acceleration", max_accel, servo_id)
+            self._write("Acceleration", accel, servo_id)
+            
+        print(f"Servos configured with P={p_coef}, I={i_coef}, D={d_coef}, Maximum Acceleration={max_accel}, Acceleration={accel}")
 
     def move(self, angles, speed=None):
         """Move servos to specified angles."""
