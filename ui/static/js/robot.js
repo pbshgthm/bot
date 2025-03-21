@@ -7,6 +7,12 @@ let baseYawGroup,
   rollGroup,
   gripperGroup;
 
+// Auto-update related variables
+let autoUpdateInterval = null;
+const UPDATE_INTERVAL = 500; // Update every 500ms
+let lastPositions = {}; // Store last known positions
+let isAutoUpdateEnabled = true;
+
 // Color scheme - improved color contrast and visibility
 const COLORS = {
   background: 0x121212, // Darker background
@@ -124,6 +130,7 @@ function init() {
   createRobot();
   setupEventListeners();
   fetchServoPositions();
+  startAutoUpdate(); // Start auto-update on initialization
   console.log("Setup complete");
 }
 
@@ -268,6 +275,19 @@ function setupEventListeners() {
   const refreshButton = document.getElementById("refresh-status");
   if (refreshButton) {
     refreshButton.addEventListener("click", fetchServoPositions);
+  }
+
+  // Add auto-update toggle listener
+  const autoUpdateToggle = document.getElementById("auto-update-toggle");
+  if (autoUpdateToggle) {
+    autoUpdateToggle.addEventListener("change", function () {
+      isAutoUpdateEnabled = this.checked;
+      if (isAutoUpdateEnabled) {
+        startAutoUpdate();
+      } else {
+        stopAutoUpdate();
+      }
+    });
   }
 }
 
@@ -693,9 +713,168 @@ function updateSliderValue(sliderId, value) {
   const slider = document.getElementById(sliderId);
   if (!slider) return;
 
-  slider.value = value;
+  // Ensure value is within UI slider range
+  const limitedValue = Math.max(
+    parseFloat(slider.min),
+    Math.min(parseFloat(slider.max), value)
+  );
+
+  slider.value = limitedValue;
   const valueDisplay = document.getElementById(`${sliderId}-value`);
-  if (valueDisplay) valueDisplay.textContent = value + "°";
+  if (valueDisplay) valueDisplay.textContent = Math.round(limitedValue) + "°";
+}
+
+// Start auto-update interval
+function startAutoUpdate() {
+  if (autoUpdateInterval) {
+    clearInterval(autoUpdateInterval);
+  }
+
+  if (isAutoUpdateEnabled) {
+    autoUpdateInterval = setInterval(function () {
+      fetchServoPositionsQuietly();
+    }, UPDATE_INTERVAL);
+    console.log("Auto-update started");
+
+    // Show active indicator
+    const updateIndicator = document.getElementById("update-indicator");
+    if (updateIndicator) {
+      updateIndicator.classList.add("active");
+    }
+  }
+}
+
+// Stop auto-update interval
+function stopAutoUpdate() {
+  if (autoUpdateInterval) {
+    clearInterval(autoUpdateInterval);
+    autoUpdateInterval = null;
+    console.log("Auto-update stopped");
+
+    // Hide active indicator
+    const updateIndicator = document.getElementById("update-indicator");
+    if (updateIndicator) {
+      updateIndicator.classList.remove("active");
+    }
+  }
+}
+
+// Fetch servo positions quietly (for auto-update)
+function fetchServoPositionsQuietly() {
+  const pulseElement = document.getElementById("update-indicator");
+  if (pulseElement) {
+    pulseElement.style.backgroundColor = "var(--warning)";
+  }
+
+  fetch("/api/servo/positions")
+    .then((response) => {
+      if (!response.ok) throw new Error("Network response was not ok");
+      updateConnectionStatus("Connected");
+      return response.json();
+    })
+    .then((data) => {
+      console.log("Received positions:", data);
+
+      // Ensure all values are within UI limits
+      for (const key in data) {
+        data[key] = Math.max(-90, Math.min(90, data[key]));
+      }
+
+      // Only update if positions have changed
+      let hasChanged = false;
+      for (const key in data) {
+        // Use a small threshold to avoid constant updates due to floating point differences
+        if (Math.abs(data[key] - (lastPositions[key] || 0)) > 0.5) {
+          hasChanged = true;
+          console.log(
+            `${key} changed from ${lastPositions[key]} to ${data[key]}`
+          );
+          break;
+        }
+      }
+
+      if (hasChanged) {
+        console.log("Positions changed, updating visualization");
+        lastPositions = { ...data };
+
+        // Update 3D model without changing sliders
+        if (data.base_yaw !== undefined) rotateYawServo(data.base_yaw);
+        if (data.pitch !== undefined) rotatePitch1Servo(data.pitch);
+        if (data.pitch2 !== undefined) rotatePitch2Servo(data.pitch2);
+        if (data.pitch3 !== undefined) rotatePitch3Servo(data.pitch3);
+        if (data.pitch4 !== undefined) rotateRollServo(data.pitch4);
+        if (data.pitch5 !== undefined) moveGripper(data.pitch5);
+
+        // Update slider positions if they don't match current values (using a threshold)
+        const updateThreshold = 1.0; // Only update if difference is more than 1 degree
+
+        if (
+          data.base_yaw !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("base-yaw").value) -
+              data.base_yaw
+          ) > updateThreshold
+        ) {
+          updateSliderValue("base-yaw", data.base_yaw);
+        }
+        if (
+          data.pitch !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("pitch").value) - data.pitch
+          ) > updateThreshold
+        ) {
+          updateSliderValue("pitch", data.pitch);
+        }
+        if (
+          data.pitch2 !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("pitch2").value) - data.pitch2
+          ) > updateThreshold
+        ) {
+          updateSliderValue("pitch2", data.pitch2);
+        }
+        if (
+          data.pitch3 !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("pitch3").value) - data.pitch3
+          ) > updateThreshold
+        ) {
+          updateSliderValue("pitch3", data.pitch3);
+        }
+        if (
+          data.pitch4 !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("roll").value) - data.pitch4
+          ) > updateThreshold
+        ) {
+          updateSliderValue("roll", data.pitch4);
+        }
+        if (
+          data.pitch5 !== undefined &&
+          Math.abs(
+            parseFloat(document.getElementById("pitch4").value) - data.pitch5
+          ) > updateThreshold
+        ) {
+          updateSliderValue("pitch4", data.pitch5);
+        }
+
+        updateLastUpdated();
+      }
+
+      if (pulseElement) {
+        pulseElement.style.backgroundColor = "var(--success)";
+        setTimeout(() => {
+          pulseElement.style.backgroundColor = "var(--warning)";
+        }, 200);
+      }
+    })
+    .catch((error) => {
+      console.error("Error fetching servo positions:", error);
+      updateConnectionStatus("Disconnected");
+      if (pulseElement) {
+        pulseElement.style.backgroundColor = "var(--danger)";
+      }
+    });
 }
 
 // Fetch current servo positions from server
@@ -713,6 +892,7 @@ function fetchServoPositions() {
       console.log("Received servo positions:", data);
       updateServerResponse(data);
       updateLastUpdated();
+      lastPositions = { ...data }; // Store last positions
 
       // Update sliders and 3D model
       if (data.base_yaw !== undefined) {
@@ -754,7 +934,20 @@ function fetchServoPositions() {
 
 // Send updated servo position to server
 function updateServoPosition(servoId, position) {
-  console.log(`Sending ${servoId} position update to server: ${position}°`);
+  // Ensure position is within UI limits
+  const uiPosition = Math.max(-90, Math.min(90, position));
+
+  // Round position for display
+  const displayPosition = Math.round(uiPosition);
+  console.log(
+    `Sending ${servoId} position update to server: ${displayPosition}°`
+  );
+
+  // Temporarily stop auto-update to avoid conflicts
+  const wasEnabled = autoUpdateInterval !== null;
+  if (wasEnabled) {
+    stopAutoUpdate();
+  }
 
   fetch("/api/servo/update", {
     method: "POST",
@@ -763,7 +956,7 @@ function updateServoPosition(servoId, position) {
     },
     body: JSON.stringify({
       servo_id: servoId,
-      position: position,
+      position: position, // Send original value to allow internal scaling
     }),
   })
     .then((response) => {
@@ -774,10 +967,25 @@ function updateServoPosition(servoId, position) {
       console.log("Server response:", data);
       updateServerResponse(data);
       updateLastUpdated();
+
+      // Update last known position with the UI-limited value from the server
+      if (data.position !== undefined) {
+        lastPositions[servoId] = data.position;
+      }
+
+      // Resume auto-update if it was enabled
+      if (wasEnabled && isAutoUpdateEnabled) {
+        setTimeout(startAutoUpdate, 500); // Short delay before resuming
+      }
     })
     .catch((error) => {
       console.error("Error updating servo position:", error);
       updateServerResponse("Error: " + error.message);
+
+      // Resume auto-update if it was enabled
+      if (wasEnabled && isAutoUpdateEnabled) {
+        setTimeout(startAutoUpdate, 500);
+      }
     });
 }
 

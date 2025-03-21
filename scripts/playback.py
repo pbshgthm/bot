@@ -44,7 +44,7 @@ def main():
             time.sleep(0.001)
         
         # Command the servos to move to the recorded positions
-        controller.move_to_positions(positions, speed=1200)  # speed can be adjusted as desired
+        controller.move_to_positions(positions)  # speed can be adjusted as desired
 
     print("Playback finished. Moving all servos to center (optional).")
     controller.center()

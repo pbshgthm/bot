@@ -203,6 +203,133 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--accent-light);
         }
+        
+        /* Status and auto-update styles */
+        .auto-update-container {
+            margin-top: 20px;
+            background-color: var(--bg-light);
+            padding: 12px;
+            border-radius: var(--border-radius);
+            border: 1px solid rgba(85, 85, 85, 0.2);
+        }
+        
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            margin-bottom: 12px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+            background-color: var(--track-color);
+            border-radius: 10px;
+            margin-right: 10px;
+            transition: .4s;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            border-radius: 50%;
+            transition: .4s;
+        }
+        
+        input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+        
+        .toggle-label {
+            color: var(--text-light);
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--warning);
+            margin-left: 8px;
+            display: inline-block;
+        }
+        
+        .pulse-dot.active {
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+            100% {
+                opacity: 1;
+            }
+        }
+        
+        .status-details {
+            width: 100%;
+            margin-top: 8px;
+            color: var(--text-dim);
+            font-size: 0.9em;
+        }
+        
+        #connection-status {
+            font-weight: bold;
+        }
+        
+        #connection-status.connected {
+            color: var(--success);
+        }
+        
+        #connection-status.connecting {
+            color: var(--warning);
+        }
+        
+        #connection-status.disconnected {
+            color: var(--danger);
+        }
+        
+        .response-box {
+            font-family: monospace;
+            font-size: 0.8em;
+            background-color: var(--bg-dark);
+            color: var(--text-dim);
+            padding: 8px;
+            border-radius: 3px;
+            max-height: 100px;
+            overflow-y: auto;
+            margin-top: 8px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
     </style>
 </head>
 <body>
@@ -248,6 +375,22 @@
         <div class="action-buttons">
             <button id="center-servos">Center All</button>
             <button id="refresh-status">Reset</button>
+        </div>
+        
+        <div class="auto-update-container">
+            <label class="toggle-switch">
+                <input type="checkbox" id="auto-update-toggle" checked>
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Auto-update position</span>
+            </label>
+            <div class="status-indicator">
+                <span id="connection-status">Disconnected</span>
+                <span id="update-indicator" class="pulse-dot"></span>
+                <div class="status-details">
+                    <span>Last updated: <span id="last-updated">--:--:--</span></span>
+                </div>
+            </div>
+            <pre id="server-response" class="response-box"></pre>
         </div>
     </div>
     

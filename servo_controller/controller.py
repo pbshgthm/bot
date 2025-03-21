@@ -10,12 +10,17 @@ BAUDRATE = 1_000_000
 TIMEOUT_MS = 1000
 NUM_RETRY = 10
 
+# Global configuration parameters
+P_COEFFICIENT = 8
+I_COEFFICIENT = 0
+D_COEFFICIENT = 16
+MAX_ACCELERATION = 254
+ACCELERATION = 254
+
 SCS_CONTROL_TABLE = {
     "Torque_Enable": (40, 1),
     "Goal_Position": (42, 2),
     "Present_Position": (56, 2),
-    "Moving_Speed": (46, 2),  # Add speed control
-    # Added entries for servo configuration
     "Mode": (33, 1),
     "P_Coefficient": (21, 1),
     "I_Coefficient": (23, 1),
@@ -27,10 +32,9 @@ SCS_CONTROL_TABLE = {
 
 CENTER_POSITION = 2048
 MODEL_RESOLUTION = 4096
-DEFAULT_SPEED = 100  # Default speed value (0-1023)
 
 class ServoController:
-    def __init__(self, port=None, servos=None, auto_configure=True, p_coef=16, i_coef=0, d_coef=32, max_accel=254, accel=254):
+    def __init__(self, port=None, servos=None):
         # Load config file
         self.config_file = os.path.join(os.path.dirname(__file__), "config.json")
         self.config = self._load_config()
@@ -63,10 +67,9 @@ class ServoController:
             except Exception as e:
                 print(f"Error loading calibration: {e}")
                 
-        # Automatically connect and configure servos if requested
-        if auto_configure:
-            self.connect()
-            self.configure_servos(p_coef, i_coef, d_coef, max_accel, accel)
+        # Automatically connect and configure servos
+        self.connect()
+        self.configure_servos()
     
     def _load_config(self):
         """Load configuration from config.json file."""
@@ -130,38 +133,45 @@ class ServoController:
             servo_cal = {}
             
             print(f"\n--- Calibrating {name} (ID: {servo_id}) ---")
+            print("Important: Move the servo to each position when prompted.")
+            print("Monitor the position and angle values to understand the mapping.")
             
-            input(f"Move servo to 0° position and press Enter...")
+            input(f"Move servo to CENTER position (0°) and press Enter...")
             zero_pos = self._read("Present_Position", [servo_id])[0]
             servo_cal["zero"] = int(zero_pos)
-            print(f"Set {zero_pos} as 0°")
+            print(f"Set {zero_pos} as center (0°)")
             
-            while True:
-                input(f"Move servo to +90° position and press Enter...")
-                pos_90_pos = self._read("Present_Position", [servo_id])[0]
-                
-                if abs(pos_90_pos - zero_pos) < 50:
-                    print(f"Warning: Position too close to 0°, try again")
-                    continue
-                
-                servo_cal["max"] = int(pos_90_pos)
-                print(f"Set {pos_90_pos} as +90°")
-                break
+            input(f"Move servo to MAXIMUM POSITIVE (+90°) position and press Enter...")
+            pos_90_pos = self._read("Present_Position", [servo_id])[0]
+            servo_cal["max"] = int(pos_90_pos)
+            print(f"Set {pos_90_pos} as maximum (+90°)")
             
-            while True:
-                input(f"Move servo to -90° position and press Enter...")
-                neg_90_pos = self._read("Present_Position", [servo_id])[0]
-                
-                if abs(neg_90_pos - zero_pos) < 50 or abs(neg_90_pos - pos_90_pos) < 50:
-                    print(f"Warning: Position too close to other positions, try again")
-                    continue
-                
-                servo_cal["min"] = int(neg_90_pos)
-                print(f"Set {neg_90_pos} as -90°")
-                break
+            input(f"Move servo to MAXIMUM NEGATIVE (-90°) position and press Enter...")
+            neg_90_pos = self._read("Present_Position", [servo_id])[0]
+            servo_cal["min"] = int(neg_90_pos)
+            print(f"Set {neg_90_pos} as minimum (-90°)")
+            
+            # Determine if servo is in normal or inverted configuration
+            is_inverted = (pos_90_pos < zero_pos) == (neg_90_pos < zero_pos)
+            direction = "INVERTED" if is_inverted else "NORMAL"
+            
+            print(f"\nCalibration complete for {name}")
+            print(f"Configuration: {direction}")
+            print(f"Position mapping:")
+            print(f"  -90° = {neg_90_pos}")
+            print(f"   0°  = {zero_pos}")
+            print(f"  +90° = {pos_90_pos}")
+            
+            if pos_90_pos > neg_90_pos:
+                print(f"Direction: Increasing position = Increasing angle")
+            else:
+                print(f"Direction: Increasing position = Decreasing angle")
+            
+            print(f"Movement range: {abs(pos_90_pos - neg_90_pos)} units")
             
             self.calibration[str(servo_id)] = servo_cal
-            print(f"Calibration complete for {name}")
+            
+            input(f"Press Enter to continue to next servo (or Ctrl+C to stop)...")
         
         self.calibration["timestamp"] = datetime.datetime.now().isoformat()
         try:
@@ -172,6 +182,7 @@ class ServoController:
             print(f"Error saving calibration: {e}")
             
         print("Calibration complete for all servos")
+        print("You can now re-enable torque and use the servos")
 
     def get_positions(self):
         """Get the current raw positions of all servos."""
@@ -184,16 +195,8 @@ class ServoController:
         return {name: self._position_to_angle(pos, self.servos[name]) 
                 for name, pos in zip(self.servo_names, positions)}
 
-    def configure_servos(self, p_coef=16, i_coef=0, d_coef=32, max_accel=254, accel=254):
-        """Configure servo parameters for optimal performance.
-        
-        Args:
-            p_coef: P coefficient for position control (Default: 16)
-            i_coef: I coefficient for position control (Default: 0)
-            d_coef: D coefficient for position control (Default: 32)
-            max_accel: Maximum acceleration (Default: 254)
-            accel: Acceleration (Default: 254)
-        """
+    def configure_servos(self):
+        """Configure servo parameters using global configuration values."""
         if not self._is_connected:
             self.connect()
             
@@ -204,45 +207,52 @@ class ServoController:
             # Set to Position Control mode
             self._write("Mode", 0, servo_id)
             
-            # Set PID coefficients
-            self._write("P_Coefficient", p_coef, servo_id)
-            self._write("I_Coefficient", i_coef, servo_id)
-            self._write("D_Coefficient", d_coef, servo_id)
+            # Set PID coefficients from global variables
+            self._write("P_Coefficient", P_COEFFICIENT, servo_id)
+            self._write("I_Coefficient", I_COEFFICIENT, servo_id)
+            self._write("D_Coefficient", D_COEFFICIENT, servo_id)
             
             # Disable the write lock to allow writing to EEPROM
             self._write("Lock", 0, servo_id)
             
-            # Set acceleration parameters
-            self._write("Maximum_Acceleration", max_accel, servo_id)
-            self._write("Acceleration", accel, servo_id)
+            # Set acceleration parameters from global variables
+            self._write("Maximum_Acceleration", MAX_ACCELERATION, servo_id)
+            self._write("Acceleration", ACCELERATION, servo_id)
             
-        print(f"Servos configured with P={p_coef}, I={i_coef}, D={d_coef}, Maximum Acceleration={max_accel}, Acceleration={accel}")
+        print(f"Servos configured with P={P_COEFFICIENT}, I={I_COEFFICIENT}, D={D_COEFFICIENT}, Maximum Acceleration={MAX_ACCELERATION}, Acceleration={ACCELERATION}")
 
-    def move(self, angles, speed=None):
-        """Move servos to specified angles."""
+    def move(self, angles):
+        """
+        Move servos to specified angles.
+        
+        While the UI is limited to ±90°, internally we allow values beyond
+        this range to ensure proper scaling and continuous motion.
+        
+        Args:
+            angles: Dictionary mapping servo names to angle values
+        """
         positions = []
         servo_ids = []
         
         for name, angle in angles.items():
-            if abs(angle) > 90:
-                raise ValueError(f"Angle {angle}° exceeds range of ±90°")
             if name not in self.servos:
                 raise ValueError(f"Unknown servo: {name}")
                 
+            # No angle limit enforcement - allow values beyond ±90° internally
+            # for proper scaling. The UI should enforce its own limits.
             servo_id = self.servos[name]
             position = self._angle_to_position(angle, servo_id)
             positions.append(position)
             servo_ids.append(servo_id)
+            
+            # Log if angle is outside normal range
+            if abs(angle) > 90:
+                print(f"Warning: {name} angle {angle}° is outside standard ±90° range")
         
         if positions:
-            # Set speed if provided
-            if speed is not None:
-                speed = max(1, min(1023, speed))  # Clamp speed between 1-1023
-                self._write("Moving_Speed", speed)
-                
             self._write("Goal_Position", positions, servo_ids)
 
-    def move_to_positions(self, positions, speed=None):
+    def move_to_positions(self, positions):
         """Move servos directly to specified raw positions."""
         pos_values = []
         servo_ids = []
@@ -256,44 +266,64 @@ class ServoController:
             servo_ids.append(servo_id)
         
         if pos_values:
-            # Set speed if provided
-            if speed is not None:
-                speed = max(1, min(1023, speed))  # Clamp speed between 1-1023
-                self._write("Moving_Speed", speed)
-                
             self._write("Goal_Position", pos_values, servo_ids)
-
-    def set_speed(self, speed):
-        """Set the movement speed for all servos (1-1023)."""
-        speed = max(1, min(1023, speed))  # Clamp between 1-1023
-        self._write("Moving_Speed", speed)
-        return speed
 
     def center(self):
         """Move all servos to their center (0°) position."""
         self.move({name: 0 for name in self.servo_names})
 
     def _angle_to_position(self, angle, servo_id):
+        """
+        Convert UI angle to servo position value using pure linear mapping.
+        
+        This method ensures a consistent linear relationship between angles and positions,
+        properly handling both normal and inverted servo configurations.
+        
+        Args:
+            angle: The angle in degrees (-90 to +90 from UI, but can be beyond that range internally)
+            servo_id: The ID of the servo
+            
+        Returns:
+            The calculated position value
+        """
         str_id = str(servo_id)
         
+        # If no calibration exists, use default mapping
         if str_id not in self.calibration:
             return int(CENTER_POSITION + (angle * MODEL_RESOLUTION / 360))
             
         cal = self.calibration[str_id]
         zero_pos = cal["zero"]
+        pos_90_pos = cal["max"]
+        neg_90_pos = cal["min"]
         
+        # Simple linear interpolation between calibration points
         if angle == 0:
             return zero_pos
         elif angle > 0:
-            pos_90_pos = cal["max"]
+            # Map positive angles to positions between zero_pos and pos_90_pos
             return int(zero_pos + (angle / 90) * (pos_90_pos - zero_pos))
         else:
-            neg_90_pos = cal["min"]
-            return int(zero_pos + (angle / 90) * (zero_pos - neg_90_pos))
+            # Map negative angles to positions between zero_pos and neg_90_pos
+            return int(zero_pos + (angle / -90) * (neg_90_pos - zero_pos))
 
     def _position_to_angle(self, position, servo_id):
+        """
+        Convert servo position value to angle using pure linear mapping.
+        
+        This method correctly maps positions back to angles,
+        handling both normal and inverted servo configurations.
+        
+        Args:
+            position: The raw position value from the servo
+            servo_id: The ID of the servo
+            
+        Returns:
+            The calculated angle in degrees
+        """
         str_id = str(servo_id)
         
+        # If no calibration exists, use default mapping
         if str_id not in self.calibration:
             return (position - CENTER_POSITION) * 360 / MODEL_RESOLUTION
             
@@ -302,14 +332,16 @@ class ServoController:
         pos_90_pos = cal["max"]
         neg_90_pos = cal["min"]
         
-        if position >= zero_pos:
-            if position > pos_90_pos:
-                return 90
-            return 90 * (position - zero_pos) / (pos_90_pos - zero_pos)
+        # Handle position exactly at zero
+        if position == zero_pos:
+            return 0.0
+            
+        # For positions on the positive side (between zero and +90)
+        if (position - zero_pos) * (pos_90_pos - zero_pos) > 0:
+            return 90.0 * (position - zero_pos) / (pos_90_pos - zero_pos)
+        # For positions on the negative side (between zero and -90)
         else:
-            if position < neg_90_pos:
-                return -90
-            return 90 * (position - zero_pos) / (zero_pos - neg_90_pos)
+            return -90.0 * (position - zero_pos) / (neg_90_pos - zero_pos)
 
     def _read(self, data_name, servo_ids=None):
         if not self._is_connected:

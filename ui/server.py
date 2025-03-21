@@ -23,6 +23,16 @@ app = Flask(__name__,
 # Initialize the servo controller with appropriate port
 servo_controller = None
 
+# Store last known positions for simulation mode
+last_known_positions = {
+    'base_yaw': 0, 
+    'pitch': 0, 
+    'pitch2': 0, 
+    'pitch3': 0, 
+    'pitch4': 0, 
+    'pitch5': 0
+}
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -34,10 +44,17 @@ def get_servo_positions():
         if servo_controller and servo_controller._is_connected:
             # Get actual positions from the servos
             angles = servo_controller.get_angles()
+            
+            # Ensure all angles are properly clamped for UI display
+            for key, value in angles.items():
+                # Clamp angles to -90 to 90 range for UI only
+                angles[key] = max(-90.0, min(90.0, float(value)))
+                last_known_positions[key] = angles[key]
+                
             return jsonify(angles)
         else:
-            # Return simulation data
-            return jsonify({name: 0 for name in (servo_controller.servo_names if servo_controller else [])})
+            # Return simulation data (last known positions)
+            return jsonify(last_known_positions)
     except Exception as e:
         print(f"Error getting servo positions: {e}")
         return jsonify({"error": str(e)}), 500
@@ -52,24 +69,38 @@ def update_servo():
     servo_id = data['servo_id']
     position = float(data['position'])  # Convert to float for precise positioning
     
-    # Validate position is within range
-    if position < -90 or position > 90:
-        return jsonify({'error': 'Position out of range (-90 to 90)'}), 400
+    # Clamp to valid UI range
+    ui_position = max(-90.0, min(90.0, position))
     
     try:
+        # Update the last known position
+        last_known_positions[servo_id] = ui_position
+        
         if servo_controller and servo_controller._is_connected:
-            # Update the actual servo position
+            # Pass the exact position to the servo controller
+            # It will handle scaling beyond 90/-90 if needed internally
             servo_controller.move({servo_id: position})
-            print(f"Moved {servo_id} to {position}°")
+            print(f"Moved {servo_id} to {position}° (UI: {ui_position}°)")
+            
+            # Wait a moment for the servo to start moving
+            time.sleep(0.05)
+            
+            # Read back the actual position to confirm
+            if servo_id in servo_controller.servo_names:
+                actual_angles = servo_controller.get_angles()
+                actual_pos = actual_angles.get(servo_id, position)
+                # Clamp for UI display
+                ui_actual_pos = max(-90.0, min(90.0, actual_pos))
+                print(f"Actual position: {actual_pos}° (UI: {ui_actual_pos}°)")
         else:
             # Simulation mode - just log the command
-            print(f"Simulation: Would move {servo_id} to {position}°")
+            print(f"Simulation: Would move {servo_id} to {position}° (UI: {ui_position}°)")
         
-        # Return success response
+        # Return success response with updated position (clamped for UI)
         return jsonify({
             'success': True, 
             'servo_id': servo_id, 
-            'position': position
+            'position': ui_position
         })
     except Exception as e:
         # Handle any errors
@@ -80,9 +111,20 @@ def update_servo():
 @app.route('/api/servo/center', methods=['POST'])
 def center_servos():
     try:
+        # Reset all last known positions to 0
+        for key in last_known_positions:
+            last_known_positions[key] = 0
+            
         if servo_controller and servo_controller._is_connected:
             servo_controller.center()
             print("Centered all servos")
+            
+            # Wait a moment for the servos to start moving
+            time.sleep(0.1)
+            
+            # Read back actual positions
+            angles = servo_controller.get_angles()
+            print(f"Actual positions after centering: {angles}")
         else:
             print("Simulation: Would center all servos")
         return jsonify({'success': True})
@@ -95,6 +137,7 @@ def main():
     parser.add_argument('--port', '-p', help='Serial port for the servo controller (overrides config)')
     parser.add_argument('--host', default='0.0.0.0', help='Host to run the server on')
     parser.add_argument('--port-number', '-n', type=int, default=1212, help='Port number for the server')
+    parser.add_argument('--calibrate', '-c', action='store_true', help='Run servo calibration at startup')
     args = parser.parse_args()
     
     global servo_controller
@@ -104,6 +147,11 @@ def main():
         servo_controller = ServoController(port=args.port)
         servo_controller.connect()
         print(f"Connected to servo controller on {servo_controller.port}")
+        
+        # Run calibration if requested
+        if args.calibrate:
+            print("Starting servo calibration...")
+            servo_controller.calibrate()
     except Exception as e:
         print(f"Warning: Could not connect to servo controller: {e}")
         print("Running in simulation mode")
@@ -115,6 +163,7 @@ def main():
             servo_controller = None
     
     try:
+        print(f"Starting server on http://{args.host}:{args.port_number}")
         app.run(host=args.host, port=args.port_number)
     finally:
         # Clean up hardware resources when the app exits
