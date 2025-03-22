@@ -11,6 +11,9 @@ interface JointControl {
 interface RobotControlsProps {
   robot: any; // Using 'any' here since the URDF robot type is not well defined in TypeScript
   onJointChange?: (jointName: string, value: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  jointValues?: Record<string, number>;
 }
 
 // Joint slider component with minimalist design
@@ -18,9 +21,13 @@ const JointSlider = memo(
   ({
     joint,
     onChange,
+    onDragStart,
+    onDragEnd,
   }: {
     joint: JointControl;
     onChange: (joint: JointControl, value: number) => void;
+    onDragStart?: () => void;
+    onDragEnd?: () => void;
   }) => {
     // Only show for adjustable joints
     if (
@@ -65,6 +72,14 @@ const JointSlider = memo(
             step="0.1"
             value={(joint.value * 180) / Math.PI}
             onChange={(e) => onChange(joint, parseFloat(e.target.value))}
+            onMouseDown={() => onDragStart?.()}
+            onTouchStart={() => onDragStart?.()}
+            onMouseUp={() => onDragEnd?.()}
+            onTouchEnd={() => onDragEnd?.()}
+            onMouseLeave={(e) => {
+              // Only trigger dragEnd if the primary button is still pressed
+              if (e.buttons === 1) onDragEnd?.();
+            }}
             className="w-full h-1.5 appearance-none bg-gray-200 rounded-full outline-none cursor-pointer slider-input"
             style={{
               WebkitAppearance: "none",
@@ -148,7 +163,13 @@ const globalStyles = `
   }
 `;
 
-const RobotControls = ({ robot, onJointChange }: RobotControlsProps) => {
+const RobotControls = ({
+  robot,
+  onJointChange,
+  onDragStart,
+  onDragEnd,
+  jointValues = {},
+}: RobotControlsProps) => {
   const [joints, setJoints] = useState<JointControl[]>([]);
 
   // Initial setup of joints from robot
@@ -178,9 +199,11 @@ const RobotControls = ({ robot, onJointChange }: RobotControlsProps) => {
       })
       .map((key) => {
         const joint = robot.joints[key];
+        const value =
+          jointValues[key] !== undefined ? jointValues[key] : joint.angle || 0;
         return {
           name: joint.name,
-          value: joint.angle || 0,
+          value,
           min: joint.limit ? joint.limit.lower : -3.14,
           max: joint.limit ? joint.limit.upper : 3.14,
           type: joint.jointType,
@@ -188,63 +211,29 @@ const RobotControls = ({ robot, onJointChange }: RobotControlsProps) => {
       });
 
     setJoints(jointControls);
-  }, [robot]);
+  }, [robot, jointValues]);
 
-  // Update joints when robot changes (like during drag operations)
+  // Update joints when external jointValues change
   useEffect(() => {
-    if (!robot || !robot.joints || joints.length === 0) return;
+    if (
+      !robot ||
+      !robot.joints ||
+      joints.length === 0 ||
+      Object.keys(jointValues).length === 0
+    )
+      return;
 
-    // Check if any joint values have changed
-    let hasChanges = false;
+    // Update joint values from props
     const updatedJoints = joints.map((joint) => {
-      if (robot.joints[joint.name]) {
-        const newValue = robot.joints[joint.name].angle || 0;
-        if (Math.abs(newValue - joint.value) > 0.001) {
-          hasChanges = true;
-          return { ...joint, value: newValue };
-        }
+      const newValue = jointValues[joint.name];
+      if (newValue !== undefined && Math.abs(newValue - joint.value) > 0.001) {
+        return { ...joint, value: newValue };
       }
       return joint;
     });
 
-    if (hasChanges) {
-      setJoints(updatedJoints);
-    }
-  }, [robot, joints]);
-
-  // Listen for angle-change events
-  useEffect(() => {
-    if (!robot || !robot.joints) return;
-
-    const handleAngleChange = (e: CustomEvent) => {
-      const jointName = e.detail;
-      if (robot.joints[jointName]) {
-        // Update specific joint with new value
-        setJoints((prevJoints) =>
-          prevJoints.map((joint) =>
-            joint.name === jointName
-              ? {
-                  ...joint,
-                  value: robot.joints[jointName].angle || joint.value,
-                }
-              : joint
-          )
-        );
-      }
-    };
-
-    document.addEventListener(
-      "angle-change",
-      handleAngleChange as EventListener
-    );
-
-    return () => {
-      document.removeEventListener(
-        "angle-change",
-        handleAngleChange as EventListener
-      );
-    };
-  }, [robot]);
+    setJoints(updatedJoints);
+  }, [jointValues, joints, robot]);
 
   const handleSliderChange = useCallback(
     (joint: JointControl, value: number) => {
@@ -264,9 +253,7 @@ const RobotControls = ({ robot, onJointChange }: RobotControlsProps) => {
       // Update the joint in our state
       setJoints((prevJoints) =>
         prevJoints.map((j) =>
-          j.name === joint.name
-            ? { ...j, value: robot.joints[joint.name].angle || actualValue }
-            : j
+          j.name === joint.name ? { ...j, value: actualValue } : j
         )
       );
     },
@@ -292,6 +279,8 @@ const RobotControls = ({ robot, onJointChange }: RobotControlsProps) => {
               key={joint.name}
               joint={joint}
               onChange={handleSliderChange}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
             />
           ))}
       </ul>
