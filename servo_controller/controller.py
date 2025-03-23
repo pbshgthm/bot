@@ -49,8 +49,8 @@ class ServoController:
         if not self.servos:
             raise ValueError("No servos specified and no servos found in config.json")
         
-        self.servo_names = list(self.servos.keys())
-        self.servo_ids = list(self.servos.values())
+        # Create a reverse mapping from ID to name for convenience
+        self.id_to_name = {servo_id: name for name, servo_id in self.servos.items()}
         
         self._is_connected = False
         self._readers = {}
@@ -186,14 +186,18 @@ class ServoController:
 
     def get_positions(self):
         """Get the current raw positions of all servos."""
-        positions = self._read("Present_Position", self.servo_ids)
-        return {name: int(pos) for name, pos in zip(self.servo_names, positions)}
+        servo_ids = list(self.id_to_name.keys())
+        positions = self._read("Present_Position", servo_ids)
+        return {name: int(pos) for servo_id, name, pos in 
+                zip(servo_ids, [self.id_to_name[id] for id in servo_ids], positions)}
 
     def get_angles(self):
         """Get the current angles of all servos."""
-        positions = self._read("Present_Position", self.servo_ids)
-        return {name: self._position_to_angle(pos, self.servos[name]) 
-                for name, pos in zip(self.servo_names, positions)}
+        servo_ids = list(self.id_to_name.keys())
+        positions = self._read("Present_Position", servo_ids)
+        return {name: self._position_to_angle(pos, servo_id) 
+                for servo_id, name, pos in 
+                zip(servo_ids, [self.id_to_name[id] for id in servo_ids], positions)}
 
     def configure_servos(self):
         """Configure servo parameters using global configuration values."""
@@ -203,7 +207,8 @@ class ServoController:
         # Enable torque first to ensure servos are active
         self._write("Torque_Enable", 1)
         
-        for servo_id in self.servo_ids:
+        servo_ids = list(self.id_to_name.keys())
+        for servo_id in servo_ids:
             # Set to Position Control mode
             self._write("Mode", 0, servo_id)
             
@@ -270,7 +275,7 @@ class ServoController:
 
     def center(self):
         """Move all servos to their center (0°) position."""
-        self.move({name: 0 for name in self.servo_names})
+        self.move({name: 0 for name in self.servos.keys()})
 
     def _angle_to_position(self, angle, servo_id):
         """
@@ -347,7 +352,8 @@ class ServoController:
         if not self._is_connected:
             self.connect()
 
-        servo_ids = servo_ids or self.servo_ids
+        # If no servo IDs specified, use all servo IDs
+        servo_ids = servo_ids or list(self.id_to_name.keys())
         if isinstance(servo_ids, int):
             servo_ids = [servo_ids]
 
@@ -373,7 +379,7 @@ class ServoController:
         if not self._is_connected:
             self.connect()
 
-        servo_ids = servo_ids or self.servo_ids
+        servo_ids = servo_ids or list(self.id_to_name.keys())
         if isinstance(servo_ids, int):
             servo_ids = [servo_ids]
 

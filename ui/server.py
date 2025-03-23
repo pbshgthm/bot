@@ -213,7 +213,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             
                             # Read back the actual position to confirm
                             actual_pos = None
-                            if servo_id in servo_controller.servo_names:
+                            if servo_id in servo_controller.servos:
                                 actual_angles = servo_controller.get_angles()
                                 actual_pos = actual_angles.get(servo_id, position)
                         else:

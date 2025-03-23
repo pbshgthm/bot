@@ -7,6 +7,7 @@ import sys
 import os
 import time
 import json
+from datetime import datetime
 
 # Add parent directory to path to allow importing the servo_controller module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,15 +15,19 @@ from servo_controller import ServoController
 
 def main():
     print("========================================")
-    print("         SERVO CALIBRATION TOOL         ")
+    print("       SERVO CALIBRATION UTILITY        ")
     print("========================================")
-    print("\nThis tool will help you calibrate servo positions.")
-    print("You'll be asked to position each servo at 0°, +90°, and -90°")
-    
-    print("\nINSTRUCTIONS:")
-    print("1. Position each servo as prompted")
-    print("2. Press Enter after positioning each servo")
-    print("3. The tool will show position mapping after each checkpoint")
+    print("")
+    print("This utility will guide you through calibrating each servo.")
+    print("For each servo, you will:")
+    print("  1. Move it to the CENTER position (0°)")
+    print("  2. Move it to the MAXIMUM POSITIVE position (+90°)")
+    print("  3. Move it to the MAXIMUM NEGATIVE position (-90°)")
+    print("")
+    print("The calibration data will be saved and used for accurate")
+    print("position control in the future.")
+    print("========================================")
+    print("")
     
     # Initialize the servo controller
     try:
@@ -30,11 +35,10 @@ def main():
         controller._write("Torque_Enable", 0)
         
         # Calibrate each servo in sequence
-        for i, name in enumerate(controller.servo_names):
-            servo_id = controller.servo_ids[i]
+        for servo_id, name in controller.id_to_name.items():
             servo_cal = {}
             
-            print(f"\n\n--- Calibrating {name} (ID: {servo_id}) [{i+1}/{len(controller.servo_names)}] ---")
+            print(f"\n\n--- Calibrating {name} (ID: {servo_id}) [{list(controller.id_to_name.keys()).index(servo_id)+1}/{len(controller.id_to_name)}] ---")
             
             # Position 1: CENTER (0°)
             input(f"\nMove {name} to CENTER position (0°) then press Enter...")
@@ -65,18 +69,18 @@ def main():
             direction = "INVERTED" if is_inverted else "NORMAL"
             
             print(f"\nCalibration summary for {name}:")
-            print(f"Configuration: {direction}")
-            print(f"Position mapping:")
-            print(f"  -90° = {neg_90_pos}")
-            print(f"   0°  = {zero_pos}")
-            print(f"  +90° = {pos_90_pos}")
+            print(f"  Configuration: {direction}")
+            print(f"  Position mapping:")
+            print(f"    -90° = {neg_90_pos}")
+            print(f"     0°  = {zero_pos}")
+            print(f"    +90° = {pos_90_pos}")
             
             if pos_90_pos > neg_90_pos:
-                print(f"Direction: Increasing position = Increasing angle")
+                print(f"  Direction: Increasing position = Increasing angle")
             else:
-                print(f"Direction: Increasing position = Decreasing angle")
+                print(f"  Direction: Increasing position = Decreasing angle")
             
-            print(f"Movement range: {abs(pos_90_pos - neg_90_pos)} units")
+            print(f"  Movement range: {abs(pos_90_pos - neg_90_pos)} units")
             
             # Test a few conversions
             test_positions = [
@@ -105,20 +109,20 @@ def main():
                 back_angle = controller._position_to_angle(pos, servo_id)
                 print(f"  Angle: {ang:+3d}° → Position: {pos:4d} → Back to angle: {back_angle:+.1f}°")
             
-            # Save after each servo calibration
-            controller.calibration["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            try:
-                with open(controller.calibration_file, 'w') as f:
-                    json.dump(controller.calibration, f, indent=2)
-                print(f"\nSaved calibration to {controller.calibration_file}")
-            except Exception as e:
-                print(f"Error saving calibration: {e}")
-            
-            if i < len(controller.servo_names) - 1:
-                input("\nPress Enter to continue to next servo...")
+            # Save calibration after each servo to preserve partial progress
+            controller.calibration["timestamp"] = datetime.now().isoformat()
+            with open(controller.calibration_file, 'w') as f:
+                json.dump(controller.calibration, f, indent=2)
+                
+            print(f"\nCalibration data saved for {name}.")
         
-        print("\nCalibration complete for all servos!")
-        print("You can now use the servos with accurate angle control.")
+        print("\n========================================")
+        print("         CALIBRATION COMPLETE!          ")
+        print("========================================")
+        print("")
+        print("All servo calibrations have been completed and saved.")
+        print("You can now use the servos with accurate positioning.")
+        print("")
         
     except KeyboardInterrupt:
         print("\nCalibration interrupted.")
