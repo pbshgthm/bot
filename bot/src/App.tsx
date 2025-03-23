@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
-import { getServoPositions, WS_URL } from "./services/ServoAPI";
+import { WS_URL } from "./services/ServoAPI";
 
 // Map from joint names to servo IDs
 // These need to match the actual joint names in the URDF model
@@ -147,7 +147,9 @@ function App() {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === "servo_positions" && data.positions) {
+
+          // Handle servo position updates (broadcasts from server)
+          if (data.type === "servo_positions") {
             // Skip updates entirely while user is dragging a slider
             if (isDraggingRef.current) {
               console.log("Ignoring server position update during slider drag");
@@ -200,6 +202,45 @@ function App() {
           } else if (data.type === "ack") {
             // Server acknowledged our message
             updateConnectionStatus("connected");
+
+            // If this ack includes positions data, update the UI
+            if (data.positions && robotRef.current && !isDraggingRef.current) {
+              updatingFromServer.current = true;
+
+              // Update the 3D model with received positions
+              let hasChanges = false;
+              const newAngles = { ...jointAngles };
+
+              Object.entries(data.positions).forEach(([servoId, degrees]) => {
+                const jointName = SERVO_TO_JOINT_MAP[servoId];
+                if (jointName && robotRef.current.joints[jointName]) {
+                  // Convert degrees to radians for 3D model
+                  const newRadians = ((degrees as number) * Math.PI) / 180;
+
+                  // Update the 3D model directly
+                  robotRef.current.setJointValue(jointName, newRadians);
+
+                  // Update our joint angle state only if it changed significantly
+                  if (Math.abs(newAngles[jointName] - newRadians) > 0.01) {
+                    newAngles[jointName] = newRadians;
+                    hasChanges = true;
+                  }
+                }
+              });
+
+              // Only update state if there were actual changes
+              if (hasChanges) {
+                setJointAngles(newAngles);
+              }
+
+              // Re-enable updates after a short delay
+              setTimeout(() => {
+                updatingFromServer.current = false;
+              }, 100);
+            }
+          } else if (data.type === "error") {
+            console.error("Received error from server:", data.message);
+            // Could show an error message to the user here
           }
         } catch (error: unknown) {
           console.error("Error processing WebSocket message:", error);
@@ -257,42 +298,7 @@ function App() {
     // Mark that we're in the mounting phase
     isMountingRef.current = true;
 
-    // Fetch initial servo positions via HTTP API when component mounts
-    const fetchInitialPositions = async () => {
-      try {
-        const positions = await getServoPositions();
-
-        // Only update if we have a robot and positions
-        if (robotRef.current && positions) {
-          updatingFromServer.current = true;
-
-          // Update the 3D model with initial positions
-          Object.entries(positions).forEach(([servoId, degrees]) => {
-            const jointName = SERVO_TO_JOINT_MAP[servoId];
-            if (jointName && robotRef.current.joints[jointName]) {
-              // Convert degrees to radians for 3D model
-              const radians = ((degrees as number) * Math.PI) / 180;
-              robotRef.current.setJointValue(jointName, radians);
-
-              // Update joint angles state
-              setJointAngles((prev) => ({
-                ...prev,
-                [jointName]: radians,
-              }));
-            }
-          });
-
-          setTimeout(() => {
-            updatingFromServer.current = false;
-          }, 100);
-        }
-      } catch (error) {
-        console.error("Failed to fetch initial positions:", error);
-      }
-    };
-
-    // Fetch initial positions
-    fetchInitialPositions();
+    // No need to fetch initial positions via HTTP API - will be received via WebSocket
 
     // Delay initial connection to avoid issues with React StrictMode double mounting
     const initialConnectionTimeout = setTimeout(() => {

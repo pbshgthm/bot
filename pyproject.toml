@@ -6,12 +6,12 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "feetech-servo-sdk>=1.0.0",
-    "flask>=3.1.0",
     "numpy>=2.2.3",
     "requests>=2.32.3",
     "pyserial>=3.5",
-    "flask-cors>=5.0.1",
-    "flask-sock>=0.7.0",
+    "fastapi>=0.115.11",
+    "websockets>=15.0.1",
+    "uvicorn>=0.34.0",
 ]
 
 [build-system]

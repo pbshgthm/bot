@@ -9,9 +9,9 @@ Controls six servos (1-6) for a robotic arm:
 - Servo 5: Roll
 - Servo 6: End effector (pitch)
 """
-from flask import Flask, render_template, request, jsonify
-from flask_cors import CORS
-from flask_sock import Sock
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import json
 import time
 import argparse
@@ -19,24 +19,21 @@ import os
 import threading
 import traceback
 import logging
+import uvicorn
+import asyncio
 from servo_controller import ServoController
-import simple_websocket
 
 # Set up logging
 logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('servo-server')
 
-# Create the Flask app with the correct template and static folder paths
-app = Flask(__name__, 
-            template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
-            static_folder=os.path.join(os.path.dirname(__file__), 'static'))
+# Create the FastAPI app
+app = FastAPI()
 
-# Enable CORS for all routes
-CORS(app)
-
-# Initialize WebSocket
-sock = Sock(app)
+# Mount static files
+static_path = os.path.join(os.path.dirname(__file__), 'static')
+app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 # Initialize the servo controller with appropriate port
 servo_controller = None
@@ -57,6 +54,45 @@ active_ws_connections = set()
 # Track last broadcast positions to only send changes
 last_broadcast_positions = {}
 
+# WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.add(websocket)
+        logger.info(f"New WebSocket connection established. Total connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        logger.info(f"WebSocket connection closed. Remaining connections: {len(self.active_connections)}")
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        try:
+            await websocket.send_text(message)
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+            
+    async def broadcast(self, message: str):
+        disconnected_websockets = set()
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception as e:
+                logger.error(f"Error broadcasting: {e}")
+                disconnected_websockets.add(connection)
+        
+        # Remove disconnected websockets
+        for ws in disconnected_websockets:
+            self.active_connections.remove(ws)
+
+manager = ConnectionManager()
+
+# Get the current event loop for broadcasting
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 # Periodically broadcast servo positions to all connected WebSocket clients
 def broadcast_positions():
     global last_broadcast_positions
@@ -73,7 +109,7 @@ def broadcast_positions():
     
     while True:
         try:
-            if active_ws_connections:
+            if manager.active_connections:
                 positions = {}
                 has_changes = False
                 
@@ -100,22 +136,15 @@ def broadcast_positions():
                 
                 # Only broadcast if there are changes or it's been a while
                 if has_changes or not last_broadcast_positions:
-                    # Prepare message for broadcast
+                    # Prepare message for broadcast - explicitly set type to broadcast to distinguish from responses
                     message = json.dumps({
                         'type': 'servo_positions',
-                        'positions': positions
+                        'positions': positions,
+                        'broadcast': True  # Indicate this is a broadcast, not a response
                     })
                     
-                    # Make a copy to avoid modification during iteration
-                    connections = active_ws_connections.copy()
-                    
-                    # Send to all active connections
-                    for ws in connections:
-                        try:
-                            ws.send(message)
-                        except Exception as e:
-                            logger.error(f"Error sending to WebSocket: {e}")
-                            # Connection may be closed, will be removed on next attempt
+                    # Use asyncio to broadcast the message
+                    asyncio.run_coroutine_threadsafe(manager.broadcast(message), loop)
                     
                     # Update last broadcast positions
                     last_broadcast_positions = positions.copy()
@@ -128,14 +157,15 @@ def broadcast_positions():
             logger.error(traceback.format_exc())
             time.sleep(1)  # Longer sleep on error
 
-# WebSocket endpoint
-@sock.route('/ws')
-def websocket(ws):
+@app.get("/")
+async def get_index():
+    return FileResponse(os.path.join(os.path.dirname(__file__), 'templates', 'index.html'))
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    
     try:
-        # Add this connection to active connections
-        active_ws_connections.add(ws)
-        logger.info(f"New WebSocket connection established. Total connections: {len(active_ws_connections)}")
-        
         # Send initial positions immediately upon connection
         try:
             positions = {}
@@ -148,36 +178,24 @@ def websocket(ws):
                 positions = last_known_positions
                 
             # Send initial positions
-            ws.send(json.dumps({
+            await websocket.send_text(json.dumps({
                 'type': 'servo_positions',
                 'positions': positions
             }))
             logger.info("Sent initial positions to new client")
         except Exception as e:
-            # Handle case where client disconnected before we could send initial positions
-            if "Connection closed:" in str(e):
-                logger.info(f"Client disconnected before receiving initial positions: {str(e)}")
-                # Remove from active connections if client already disconnected
-                try:
-                    active_ws_connections.remove(ws)
-                except KeyError:
-                    pass
-                return
-            else:
-                logger.error(f"Error sending initial positions: {e}")
+            logger.error(f"Error sending initial positions: {e}")
         
         # Keep connection alive until client disconnects
         while True:
+            # Receive message from client
+            message = await websocket.receive_text()
+            logger.info(f"Received WebSocket message: {message}")
+            
+            # Process message
             try:
-                message = ws.receive()
-                if message is None:
-                    # Connection closed by client
-                    logger.info("Client closed connection (None received)")
-                    break
-                    
-                logger.info(f"Received WebSocket message: {message}")
-                
                 data = json.loads(message)
+                request_id = data.get('requestId')
                 
                 # Handle different message types
                 if data.get('type') == 'servo_update':
@@ -185,16 +203,31 @@ def websocket(ws):
                     position = data.get('position')
                     
                     if servo_id and position is not None:
-                        # Process servo update similar to REST API
+                        # Process servo update
                         ui_position = max(-90.0, min(90.0, float(position)))
                         last_known_positions[servo_id] = ui_position
                         
                         if servo_controller and servo_controller._is_connected:
                             servo_controller.move({servo_id: position})
                             logger.info(f"WS: Moved {servo_id} to {position}° (UI: {ui_position}°)")
+                            
+                            # Read back the actual position to confirm
+                            actual_pos = None
+                            if servo_id in servo_controller.servo_names:
+                                actual_angles = servo_controller.get_angles()
+                                actual_pos = actual_angles.get(servo_id, position)
                         else:
                             logger.info(f"WS Simulation: Would move {servo_id} to {position}° (UI: {ui_position}°)")
                             
+                        # Send acknowledgment
+                        await websocket.send_text(json.dumps({
+                            'type': 'ack',
+                            'requestId': request_id,
+                            'status': 'success',
+                            'servo_id': servo_id,
+                            'position': ui_position
+                        }))
+                
                 elif data.get('type') == 'center_all':
                     # Center all servos
                     for key in last_known_positions:
@@ -205,176 +238,79 @@ def websocket(ws):
                         logger.info("WS: Centered all servos")
                     else:
                         logger.info("WS Simulation: Would center all servos")
-                
-                # Respond with acknowledgment
-                try:
-                    ws.send(json.dumps({
+                        
+                    # Send acknowledgment
+                    await websocket.send_text(json.dumps({
                         'type': 'ack',
-                        'status': 'success',
-                        'message': f"Processed {data.get('type')}"
+                        'requestId': request_id,
+                        'status': 'success'
                     }))
-                except Exception as e:
-                    if "Connection closed:" in str(e):
-                        logger.info(f"Client disconnected before receiving ack: {str(e)}")
-                        break
-                    else:
-                        raise
                 
+                elif data.get('type') == 'get_positions':
+                    # Get current positions
+                    positions = {}
+                    if servo_controller and servo_controller._is_connected:
+                        positions = servo_controller.get_angles()
+                        # Ensure all angles are properly clamped for UI display
+                        for key, value in positions.items():
+                            positions[key] = max(-90.0, min(90.0, float(value)))
+                            last_known_positions[key] = positions[key]
+                    else:
+                        positions = last_known_positions
+                        
+                    # Send response with positions
+                    await websocket.send_text(json.dumps({
+                        'type': 'ack',
+                        'requestId': request_id,
+                        'status': 'success',
+                        'positions': positions
+                    }))
+                    
+                else:
+                    # Unknown message type
+                    logger.warning(f"Unknown WebSocket message type: {data.get('type')}")
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'requestId': request_id,
+                        'message': f"Unknown message type: {data.get('type')}"
+                    }))
+                    
             except json.JSONDecodeError as e:
                 logger.error(f"Received invalid JSON: {message}")
                 logger.error(traceback.format_exc())
                 # Send error response
-                try:
-                    ws.send(json.dumps({
-                        'type': 'error',
-                        'message': 'Invalid JSON format'
-                    }))
-                except:
-                    logger.info("Failed to send error response (client may have disconnected)")
-                    break
-            except Exception as e:
-                # Handle closed connections directly without full traceback for expected disconnects
-                if isinstance(e, (simple_websocket.errors.ConnectionClosed)):
-                    logger.info(f"Client disconnected: {e}")
-                    break
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': 'Invalid JSON format'
+                }))
                 
-                # For other errors, log more details
+            except Exception as e:
                 logger.error(f"Error processing WebSocket message: {e}")
                 logger.error(traceback.format_exc())
                 
-                # Check if connection is broken
-                if "Invalid control opcode" in str(e) or "Connection refused" in str(e) or "Connection closed:" in str(e):
-                    logger.info("WebSocket connection appears to be broken, breaking the loop")
-                    break
-                else:
-                    # Try sending error response
-                    try:
-                        ws.send(json.dumps({
-                            'type': 'error',
-                            'message': str(e)
-                        }))
-                    except:
-                        # If we can't send, the connection is probably closed
-                        logger.info("Failed to send error response, breaking connection loop")
-                        break
-    
-    except simple_websocket.errors.ConnectionClosed as e:
-        logger.info(f"Client disconnected during connection setup: {e}")
+                # Try sending error response with requestId if available
+                try:
+                    error_response = {
+                        'type': 'error',
+                        'message': str(e)
+                    }
+                    if request_id:
+                        error_response['requestId'] = request_id
+                    await websocket.send_text(json.dumps(error_response))
+                except:
+                    logger.error("Failed to send error response")
+                    
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"WebSocket connection error: {e}")
+        logger.error(f"WebSocket error: {e}")
         logger.error(traceback.format_exc())
     finally:
-        # Remove from active connections when the connection is closed
-        try:
-            active_ws_connections.remove(ws)
-        except KeyError:
-            # May have already been removed
-            pass
-        logger.info(f"WebSocket connection closed. Remaining connections: {len(active_ws_connections)}")
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-# API endpoint to get current servo positions
-@app.route('/api/servo/positions', methods=['GET'])
-def get_servo_positions():
-    try:
-        if servo_controller and servo_controller._is_connected:
-            # Get actual positions from the servos
-            angles = servo_controller.get_angles()
-            
-            # Ensure all angles are properly clamped for UI display
-            for key, value in angles.items():
-                # Clamp angles to -90 to 90 range for UI only
-                angles[key] = max(-90.0, min(90.0, float(value)))
-                last_known_positions[key] = angles[key]
-                
-            return jsonify(angles)
-        else:
-            # Return simulation data (last known positions)
-            return jsonify(last_known_positions)
-    except Exception as e:
-        logger.error(f"Error getting servo positions: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
-
-# API endpoint to update a servo position
-@app.route('/api/servo/update', methods=['POST'])
-def update_servo():
-    data = request.json
-    if not data or 'servo_id' not in data or 'position' not in data:
-        return jsonify({'error': 'Invalid request data'}), 400
-    
-    servo_id = data['servo_id']
-    position = float(data['position'])  # Convert to float for precise positioning
-    
-    # Clamp to valid UI range
-    ui_position = max(-90.0, min(90.0, position))
-    
-    try:
-        # Update the last known position
-        last_known_positions[servo_id] = ui_position
-        
-        if servo_controller and servo_controller._is_connected:
-            # Pass the exact position to the servo controller
-            # It will handle scaling beyond 90/-90 if needed internally
-            servo_controller.move({servo_id: position})
-            logger.info(f"Moved {servo_id} to {position}° (UI: {ui_position}°)")
-            
-            # Wait a moment for the servo to start moving
-            time.sleep(0.05)
-            
-            # Read back the actual position to confirm
-            if servo_id in servo_controller.servo_names:
-                actual_angles = servo_controller.get_angles()
-                actual_pos = actual_angles.get(servo_id, position)
-                # Clamp for UI display
-                ui_actual_pos = max(-90.0, min(90.0, actual_pos))
-                logger.info(f"Actual position: {actual_pos}° (UI: {ui_actual_pos}°)")
-        else:
-            # Simulation mode - just log the command
-            logger.info(f"Simulation: Would move {servo_id} to {position}° (UI: {ui_position}°)")
-        
-        # Return success response with updated position (clamped for UI)
-        return jsonify({
-            'success': True, 
-            'servo_id': servo_id, 
-            'position': ui_position
-        })
-    except Exception as e:
-        # Handle any errors
-        logger.error(f"Error setting servo position: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
-
-# API endpoint to center all servos
-@app.route('/api/servo/center', methods=['POST'])
-def center_servos():
-    try:
-        # Reset all last known positions to 0
-        for key in last_known_positions:
-            last_known_positions[key] = 0
-            
-        if servo_controller and servo_controller._is_connected:
-            servo_controller.center()
-            logger.info("Centered all servos")
-            
-            # Wait a moment for the servos to start moving
-            time.sleep(0.1)
-            
-            # Read back actual positions
-            angles = servo_controller.get_angles()
-            logger.info(f"Actual positions after centering: {angles}")
-        else:
-            logger.info("Simulation: Would center all servos")
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.error(f"Error centering servos: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        manager.disconnect(websocket)
 
 def main():
+    logger.info("Starting servo control server")
+    
     parser = argparse.ArgumentParser(description='Servo Control Server')
     parser.add_argument('--port', '-p', help='Serial port for the servo controller (overrides config)')
     parser.add_argument('--host', default='0.0.0.0', help='Host to run the server on')
@@ -386,9 +322,6 @@ def main():
     # Set log level based on debug flag
     if args.debug:
         logger.setLevel(logging.DEBUG)
-        app.logger.setLevel(logging.DEBUG)
-    
-    logger.info("Starting servo control server")
     
     global servo_controller
     
@@ -420,10 +353,8 @@ def main():
     
     try:
         logger.info(f"Starting server on http://{args.host}:{args.port_number}")
-        # Configure for better WebSocket handling in development
-        # Disable reloader to prevent broadcast thread duplication
-        app.run(host=args.host, port=args.port_number, debug=args.debug, 
-                threaded=True, use_reloader=False)
+        # Start the server with Uvicorn
+        uvicorn.run(app, host=args.host, port=args.port_number, log_level="info")
     finally:
         # Clean up hardware resources when the app exits
         if servo_controller and servo_controller._is_connected:

@@ -1,0 +1,86 @@
+ Backend (Python) Simplifications
+
+  1. Combined REST API and WebSocket
+    - Currently maintains two parallel communication channels with
+  duplicate logic
+    - Recommendation: Use WebSocket as the primary communication method and
+   eliminate the redundant REST API
+  2. Simplified Servo Identification
+    - Current approach uses multiple dictionaries mapping servo names to
+  IDs
+    - Recommendation: Use servo IDs directly as the primary identifier and
+  remove redundant mappings (self.servo_names, self.servo_ids, etc.)
+  3. Optimized Data Structures
+    - The code uses self._readers and self._writers caching dictionaries
+  with complex key generation
+    - Recommendation: Replace with a proper class-based structure or
+  simpler lookup mechanism
+  4. Reduced Error Handling Complexity
+    - WebSocket code has excessive nested try/except blocks and redundant
+  error handling
+    - Recommendation: Standardize error patterns and use early returns
+  instead of deep nesting
+  5. Unified Position/Angle Conversion
+    - Duplicate conversion logic in _position_to_angle and
+  _angle_to_position
+    - Recommendation: Use a single direction conversion function with an
+  inversion parameter
+  6. Simplified Broadcast Logic
+    - Complex throttling with last_broadcast_positions and position change
+  detection
+    - Recommendation: Use a proper event-based model instead of polling for
+   changes
+
+  Frontend (TypeScript/React) Simplifications
+
+  1. WebSocket Management
+    - Overcomplicated WebSocket connection code with multiple refs tracking
+   state
+    - Recommendation: Replace with a custom hook that handles connection
+  logic
+  2. Optimized State Management
+    - App component uses too many useRef variables to track state
+    - Recommendation: Use useReducer for complex state or extract to custom
+   hooks
+  3. Simplified Mapping Logic
+    - Redundant mappings with both JOINT_TO_SERVO_MAP and
+  SERVO_TO_JOINT_MAP
+    - Recommendation: Derive one from the other when needed or use a single
+   bidirectional map
+  4. Improved 3D Controls
+    - The URDFDragControls class (885 lines) is overly complex for basic
+  joint manipulation
+    - Recommendation: Replace with a simpler implementation or use an
+  established library
+  5. Reduced Code Duplication
+    - Multiple implementations of degree/radian conversion throughout the
+  codebase
+    - Recommendation: Extract common utilities into a shared module
+
+  System-Level Simplifications
+
+  1. Communication Architecture
+    - Do we need both API endpoints and WebSockets? No, WebSockets alone
+  would be sufficient
+    - Recommendation: Use WebSockets exclusively for full-duplex
+  communication
+  2. Servo Identification
+    - Is there a way to use servo IDs directly? Yes
+    - Recommendation: Use numeric IDs directly instead of string names
+  mapped to IDs
+  3. Calibration Storage
+    - Current approach stores calibration in a redundant JSON structure
+    - Recommendation: Simplify to use servo ID as key with direct values
+  (zero/min/max)
+  4. Simulation Mode
+    - Parallel code paths for simulation vs. hardware mode
+    - Recommendation: Use dependency injection pattern to abstract hardware
+   access
+  5. State Synchronization
+    - Complex code to synchronize UI state with hardware state
+    - Recommendation: Implement a proper state machine pattern to manage
+  synchronization
+
+  These simplifications would reduce code complexity, improve
+  maintainability, and make the system more robust while maintaining the
+  same functionality.
