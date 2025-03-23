@@ -295,22 +295,33 @@ class ServoController:
         
         # If no calibration exists, use default mapping
         if str_id not in self.calibration:
-            return int(CENTER_POSITION + (angle * MODEL_RESOLUTION / 360))
+            position = int(CENTER_POSITION + (angle * MODEL_RESOLUTION / 360))
+            # print(f"No calibration for servo {servo_id}, using default mapping: {angle}° -> {position}")
+            return position
             
         cal = self.calibration[str_id]
-        zero_pos = cal["zero"]
-        pos_90_pos = cal["max"]
-        neg_90_pos = cal["min"]
+        zero_pos = cal.get("zero")
+        pos_90_pos = cal.get("max")
+        neg_90_pos = cal.get("min")
+        
+        # Ensure all calibration points are valid
+        if zero_pos is None or pos_90_pos is None or neg_90_pos is None:
+            print(f"Warning: Incomplete calibration for servo {servo_id}, using default mapping")
+            return int(CENTER_POSITION + (angle * MODEL_RESOLUTION / 360))
         
         # Simple linear interpolation between calibration points
         if angle == 0:
             return zero_pos
         elif angle > 0:
             # Map positive angles to positions between zero_pos and pos_90_pos
-            return int(zero_pos + (angle / 90) * (pos_90_pos - zero_pos))
+            position = int(zero_pos + (angle / 90) * (pos_90_pos - zero_pos))
+            # print(f"Positive angle calculation for servo {servo_id}: {angle}° -> {position}")
+            return position
         else:
             # Map negative angles to positions between zero_pos and neg_90_pos
-            return int(zero_pos + (angle / -90) * (neg_90_pos - zero_pos))
+            position = int(zero_pos + (angle / -90) * (neg_90_pos - zero_pos))
+            # print(f"Negative angle calculation for servo {servo_id}: {angle}° -> {position}")
+            return position
 
     def _position_to_angle(self, position, servo_id):
         """
@@ -330,12 +341,19 @@ class ServoController:
         
         # If no calibration exists, use default mapping
         if str_id not in self.calibration:
-            return (position - CENTER_POSITION) * 360 / MODEL_RESOLUTION
+            angle = (position - CENTER_POSITION) * 360 / MODEL_RESOLUTION
+            # print(f"No calibration for servo {servo_id}, using default mapping: {position} -> {angle}°")
+            return angle
             
         cal = self.calibration[str_id]
-        zero_pos = cal["zero"]
-        pos_90_pos = cal["max"]
-        neg_90_pos = cal["min"]
+        zero_pos = cal.get("zero")
+        pos_90_pos = cal.get("max")
+        neg_90_pos = cal.get("min")
+        
+        # Ensure all calibration points are valid
+        if zero_pos is None or pos_90_pos is None or neg_90_pos is None:
+            print(f"Warning: Incomplete calibration for servo {servo_id}, using default mapping")
+            return (position - CENTER_POSITION) * 360 / MODEL_RESOLUTION
         
         # Handle position exactly at zero
         if position == zero_pos:
@@ -343,10 +361,25 @@ class ServoController:
             
         # For positions on the positive side (between zero and +90)
         if (position - zero_pos) * (pos_90_pos - zero_pos) > 0:
-            return 90.0 * (position - zero_pos) / (pos_90_pos - zero_pos)
+            # Check for division by zero
+            if pos_90_pos == zero_pos:
+                print(f"Warning: pos_90_pos equals zero_pos for servo {servo_id}, cannot calculate angle")
+                return 0.0
+                
+            angle = 90.0 * (position - zero_pos) / (pos_90_pos - zero_pos)
+            # print(f"Positive side calculation for servo {servo_id}: {position} -> {angle}°")
+            return angle
+            
         # For positions on the negative side (between zero and -90)
         else:
-            return -90.0 * (position - zero_pos) / (neg_90_pos - zero_pos)
+            # Check for division by zero
+            if neg_90_pos == zero_pos:
+                print(f"Warning: neg_90_pos equals zero_pos for servo {servo_id}, cannot calculate angle")
+                return 0.0
+                
+            angle = -90.0 * (position - zero_pos) / (neg_90_pos - zero_pos)
+            # print(f"Negative side calculation for servo {servo_id}: {position} -> {angle}°")
+            return angle
 
     def _read(self, data_name, servo_ids=None):
         if not self._is_connected:
@@ -422,4 +455,29 @@ class ServoController:
                 (value >> 24) & 0xFF,
             ]
         else:
-            raise ValueError(f"Unsupported byte size: {size}") 
+            raise ValueError(f"Unsupported byte size: {size}")
+
+    def load_calibration(self):
+        """Reload calibration data from file."""
+        if os.path.exists(self.calibration_file):
+            try:
+                with open(self.calibration_file, 'r') as f:
+                    self.calibration = json.load(f)
+                print(f"Reloaded calibration from {self.calibration_file}")
+                
+                # Log calibration values for debugging
+                for servo_id, cal in self.calibration.items():
+                    if servo_id.isdigit():  # Only process servo entries, not metadata
+                        servo_name = self.id_to_name.get(int(servo_id), f"Unknown-{servo_id}")
+                        print(f"Servo {servo_name} (ID {servo_id}) calibration:")
+                        print(f"  Zero (0°): {cal.get('zero')}")
+                        print(f"  Max (+90°): {cal.get('max')}")
+                        print(f"  Min (-90°): {cal.get('min')}")
+                
+                return True
+            except Exception as e:
+                print(f"Error loading calibration: {e}")
+                return False
+        else:
+            print(f"Calibration file not found: {self.calibration_file}")
+            return False 

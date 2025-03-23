@@ -251,13 +251,27 @@ function App() {
                 "Updating robot positions with calibrated values:",
                 data.positions
               );
+
+              // Debug logging for conversion process
+              console.log("Joint angle conversion details:");
+
               Object.entries(data.positions).forEach(([servoId, degrees]) => {
                 const jointName = SERVO_TO_JOINT_MAP[servoId];
                 if (jointName) {
-                  robotRef.current.setJointValue(
-                    jointName,
-                    ((degrees as number) * Math.PI) / 180
+                  // Ensure we're working with a number
+                  const degreeValue =
+                    typeof degrees === "number"
+                      ? degrees
+                      : parseFloat(String(degrees));
+                  const radians = (degreeValue * Math.PI) / 180;
+
+                  console.log(
+                    `  ${servoId} (${jointName}): ${degreeValue}° → ${radians.toFixed(
+                      4
+                    )} rad`
                   );
+
+                  robotRef.current.setJointValue(jointName, radians);
                 }
               });
 
@@ -269,8 +283,14 @@ function App() {
                 Object.entries(data.positions).forEach(([servoId, degrees]) => {
                   const jointName = SERVO_TO_JOINT_MAP[servoId];
                   if (jointName) {
-                    newAngles[jointName] =
-                      ((degrees as number) * Math.PI) / 180;
+                    // Ensure we're working with a number
+                    const degreeValue =
+                      typeof degrees === "number"
+                        ? degrees
+                        : parseFloat(String(degrees));
+                    const radians = (degreeValue * Math.PI) / 180;
+
+                    newAngles[jointName] = radians;
                     hasChanges = true;
                   }
                 });

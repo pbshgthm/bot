@@ -442,16 +442,33 @@ async def websocket_endpoint(websocket: WebSocket):
                                         with open(servo_controller.calibration_file, 'w') as f:
                                             json.dump(servo_controller.calibration, f, indent=2)
                                         logger.info(f"Saved calibration to {servo_controller.calibration_file}")
+                                        
+                                        # Ensure calibration is properly loaded after saving
+                                        # This is important for proper angle calculations
+                                        if hasattr(servo_controller, 'load_calibration'):
+                                            servo_controller.load_calibration()
+                                            logger.info("Reloaded calibration data after saving")
+                                        else:
+                                            # If load_calibration doesn't exist, ensure the calibration is properly set
+                                            logger.info("No load_calibration method available, using calibration directly")
                                     except Exception as e:
                                         logger.error(f"Error saving calibration: {e}")
                                     
                                     # Re-enable torque
                                     servo_controller._write("Torque_Enable", 1)
                                     
+                                    # Get current angles for sending
+                                    positions = servo_controller.get_angles()
+                                    
+                                    # Log the angles for debugging
+                                    logger.info("Sending calibration_complete with positions:")
+                                    for joint, angle in positions.items():
+                                        logger.info(f"  {joint}: {angle}°")
+                                    
                                     # Send calibration complete
                                     await websocket.send_text(json.dumps({
                                         'type': 'calibration_complete',
-                                        'positions': servo_controller.get_angles()
+                                        'positions': positions
                                     }))
                                     
                                     # Reset calibration flag
