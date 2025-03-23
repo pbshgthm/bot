@@ -31,10 +31,6 @@ logger = logging.getLogger('servo-server')
 # Create the FastAPI app
 app = FastAPI()
 
-# Mount static files
-static_path = os.path.join(os.path.dirname(__file__), 'static')
-app.mount("/static", StaticFiles(directory=static_path), name="static")
-
 # Initialize the servo controller with appropriate port
 servo_controller = None
 
