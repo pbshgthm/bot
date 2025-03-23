@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import React, { memo, useCallback, useEffect, useState } from "react";
 
 interface JointControl {
   name: string;
@@ -14,6 +14,7 @@ interface RobotControlsProps {
   onDragStart?: () => void;
   onDragEnd?: () => void;
   jointValues?: Record<string, number>;
+  isCalibrating?: boolean;
 }
 
 // Joint slider component with minimalist design
@@ -169,6 +170,7 @@ const RobotControls = ({
   onDragStart,
   onDragEnd,
   jointValues = {},
+  isCalibrating,
 }: RobotControlsProps) => {
   const [joints, setJoints] = useState<JointControl[]>([]);
 
@@ -233,7 +235,7 @@ const RobotControls = ({
     });
 
     setJoints(updatedJoints);
-  }, [jointValues, joints, robot]);
+  }, [jointValues, robot]);
 
   const handleSliderChange = useCallback(
     (joint: JointControl, value: number) => {
@@ -271,19 +273,23 @@ const RobotControls = ({
         Robot Controls
       </h2>
 
-      <ul className="flex flex-col space-y-1">
-        {joints
-          .filter((joint) => joint.type !== "fixed")
-          .map((joint) => (
-            <JointSlider
-              key={joint.name}
-              joint={joint}
-              onChange={handleSliderChange}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-            />
-          ))}
-      </ul>
+      {isCalibrating ? (
+        <div className="text-center p-4">Calibration in progress...</div>
+      ) : (
+        <ul className="flex flex-col space-y-1">
+          {joints
+            .filter((joint) => joint.type !== "fixed")
+            .map((joint) => (
+              <JointSlider
+                key={joint.name}
+                joint={joint}
+                onChange={handleSliderChange}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+              />
+            ))}
+        </ul>
+      )}
     </div>
   );
 };

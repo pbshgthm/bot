@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
 import { WS_URL } from "./services/ServoAPI";
@@ -47,6 +47,15 @@ function App() {
   const isMountingRef = useRef(false);
   // Last time we tried to connect to prevent rapid reconnection attempts
   const lastConnectionAttemptRef = useRef(0);
+  const [calibrationMode, setCalibrationMode] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [currentCalibrationStep, setCurrentCalibrationStep] = useState<{
+    joint: string;
+    angle: number;
+    current_step?: number;
+    total_steps?: number;
+  } | null>(null);
+  const [captureSuccess, setCaptureSuccess] = useState(false);
 
   // Initialize joint angles from URDF model
   useEffect(() => {
@@ -148,96 +157,132 @@ function App() {
         try {
           const data = JSON.parse(event.data);
 
-          // Handle servo position updates (broadcasts from server)
-          if (data.type === "servo_positions") {
-            // Skip updates entirely while user is dragging a slider
-            if (isDraggingRef.current) {
-              console.log("Ignoring server position update during slider drag");
-              return;
-            }
+          // Handle different message types
+          if (data.type === "servo_positions" && !isDraggingRef.current) {
+            // Process position update
+            const positions = data.positions || {};
 
-            // Only update if we have a robot and aren't currently updating from other sources
-            if (robotRef.current && !updatingFromServer.current) {
-              const now = Date.now();
-
-              // Throttle updates to avoid excessive rendering
-              if (now - lastUpdateTimeRef.current > throttleTimeMs) {
-                // Prevent recursive updates
-                updatingFromServer.current = true;
-
-                // Update 3D model joints with servo positions
-                let hasChanges = false;
-                const newAngles = { ...jointAngles };
-
-                Object.entries(data.positions).forEach(([servoId, degrees]) => {
+            // Only update if these are new positions and not our own update echo
+            if (
+              !data.broadcast ||
+              lastUpdateTimeRef.current < Date.now() - 250
+            ) {
+              // Update our 3D model
+              if (robotRef.current) {
+                Object.entries(positions).forEach(([servoId, degrees]) => {
                   const jointName = SERVO_TO_JOINT_MAP[servoId];
-                  if (jointName && robotRef.current.joints[jointName]) {
-                    // Convert degrees to radians for 3D model
-                    const newRadians = ((degrees as number) * Math.PI) / 180;
+                  if (jointName) {
+                    // Update 3D model (convert degrees to radians)
+                    robotRef.current.setJointValue(
+                      jointName,
+                      ((degrees as number) * Math.PI) / 180
+                    );
+                  }
+                });
+              }
 
-                    // Update the 3D model directly
-                    robotRef.current.setJointValue(jointName, newRadians);
+              // Update our jointAngles state without causing refetching
+              setJointAngles((prevAngles) => {
+                const newAngles = { ...prevAngles };
+                let hasChanges = false;
 
-                    // Update our joint angle state only if it changed significantly
-                    if (Math.abs(newAngles[jointName] - newRadians) > 0.01) {
-                      newAngles[jointName] = newRadians;
-                      hasChanges = true;
-                    }
+                // Update each angle that has changed
+                Object.entries(positions).forEach(([servoId, degrees]) => {
+                  const jointName = SERVO_TO_JOINT_MAP[servoId];
+                  if (
+                    jointName &&
+                    (!prevAngles[jointName] ||
+                      Math.abs(
+                        prevAngles[jointName] -
+                          ((degrees as number) * Math.PI) / 180
+                      ) > 0.001)
+                  ) {
+                    newAngles[jointName] =
+                      ((degrees as number) * Math.PI) / 180;
+                    hasChanges = true;
                   }
                 });
 
-                // Only update state if there were actual changes
-                if (hasChanges) {
-                  setJointAngles(newAngles);
-                }
-
-                lastUpdateTimeRef.current = now;
-
-                // Schedule re-enabling updates
-                setTimeout(() => {
-                  updatingFromServer.current = false;
-                }, 100);
-              }
+                // Only update state if values changed
+                return hasChanges ? newAngles : prevAngles;
+              });
             }
-          } else if (data.type === "ack") {
-            // Server acknowledged our message
-            updateConnectionStatus("connected");
+          } else if (data.type === "calibration_step") {
+            const { joint, angle, current_step, total_steps } = data;
+            console.log(
+              `Received calibration step: Joint=${joint}, Angle=${angle}°, Step=${current_step}/${total_steps}`
+            );
 
-            // If this ack includes positions data, update the UI
-            if (data.positions && robotRef.current && !isDraggingRef.current) {
-              updatingFromServer.current = true;
+            setCurrentCalibrationStep({
+              joint,
+              angle,
+              current_step,
+              total_steps,
+            });
 
-              // Update the 3D model with received positions
-              let hasChanges = false;
-              const newAngles = { ...jointAngles };
+            if (robotRef.current) {
+              Object.keys(robotRef.current.joints).forEach((jointName) => {
+                robotRef.current.setJointValue(
+                  jointName,
+                  jointName === SERVO_TO_JOINT_MAP[joint]
+                    ? (angle * Math.PI) / 180
+                    : 0
+                );
+              });
+            }
+          } else if (data.type === "position_captured") {
+            // Notify user of successful position capture
+            console.log(
+              `Position captured for ${data.joint} at ${data.angle}°: ${data.position} - Waiting for next step...`
+            );
 
+            // Show visual feedback
+            setCaptureSuccess(true);
+            setTimeout(() => setCaptureSuccess(false), 1500);
+          } else if (data.type === "calibration_complete") {
+            console.log("Received calibration_complete message!", data);
+            setIsCalibrating(false);
+            setCurrentCalibrationStep(null);
+            setCalibrationMode(false);
+
+            // Sync positions if provided
+            if (data.positions && robotRef.current) {
+              console.log(
+                "Updating robot positions with calibrated values:",
+                data.positions
+              );
               Object.entries(data.positions).forEach(([servoId, degrees]) => {
                 const jointName = SERVO_TO_JOINT_MAP[servoId];
-                if (jointName && robotRef.current.joints[jointName]) {
-                  // Convert degrees to radians for 3D model
-                  const newRadians = ((degrees as number) * Math.PI) / 180;
-
-                  // Update the 3D model directly
-                  robotRef.current.setJointValue(jointName, newRadians);
-
-                  // Update our joint angle state only if it changed significantly
-                  if (Math.abs(newAngles[jointName] - newRadians) > 0.01) {
-                    newAngles[jointName] = newRadians;
-                    hasChanges = true;
-                  }
+                if (jointName) {
+                  robotRef.current.setJointValue(
+                    jointName,
+                    ((degrees as number) * Math.PI) / 180
+                  );
                 }
               });
 
-              // Only update state if there were actual changes
-              if (hasChanges) {
-                setJointAngles(newAngles);
-              }
+              // Also update our local joint angles state
+              setJointAngles((prevAngles) => {
+                const newAngles = { ...prevAngles };
+                let hasChanges = false;
 
-              // Re-enable updates after a short delay
-              setTimeout(() => {
-                updatingFromServer.current = false;
-              }, 100);
+                Object.entries(data.positions).forEach(([servoId, degrees]) => {
+                  const jointName = SERVO_TO_JOINT_MAP[servoId];
+                  if (jointName) {
+                    newAngles[jointName] =
+                      ((degrees as number) * Math.PI) / 180;
+                    hasChanges = true;
+                  }
+                });
+
+                return hasChanges ? newAngles : prevAngles;
+              });
             }
+
+            // Notify user of completion
+            console.log(
+              "🎉 Calibration completed successfully! New positions applied."
+            );
           } else if (data.type === "error") {
             console.error("Received error from server:", data.message);
             // Could show an error message to the user here
@@ -291,7 +336,7 @@ function App() {
       console.error("Failed to create WebSocket:", error);
       updateConnectionStatus("disconnected");
     }
-  }, [jointAngles, updateConnectionStatus]);
+  }, [updateConnectionStatus]);
 
   // Initialize WebSocket connection with protection against React's double-mount behavior
   useEffect(() => {
@@ -430,6 +475,67 @@ function App() {
     }
   }, [jointAngles, setupWebSocket, updateConnectionStatus]);
 
+  // Handle calibrate button click
+  const handleCalibrateClick = useCallback(() => {
+    // Send calibration command via WebSocket if connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "start_calibration",
+        })
+      );
+      console.log("Sent calibrate command via WebSocket");
+      setCalibrationMode(true);
+      setIsCalibrating(true);
+
+      // The main message handler already processes calibration_step and calibration_complete messages
+      // so we don't need to add a separate event listener here
+    } else {
+      updateConnectionStatus("disconnected");
+
+      // Only try to reconnect if not already trying and not in mounting phase
+      if (
+        !isMountingRef.current &&
+        wsRef.current?.readyState !== WebSocket.CONNECTING
+      ) {
+        setupWebSocket();
+      }
+    }
+  }, [setupWebSocket, updateConnectionStatus]);
+
+  // Handle capture position button click
+  const handleCapturePosition = useCallback(() => {
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN &&
+      currentCalibrationStep
+    ) {
+      // Log the current calibration step to debug
+      console.log(
+        "Current calibration step:",
+        JSON.stringify(currentCalibrationStep)
+      );
+
+      // Make sure we're using the same step number that the server sent us
+      // Server expects step_number to be the current step being captured, not the next step
+      const stepNumber = currentCalibrationStep.current_step;
+
+      console.log(
+        `Capturing position for step ${stepNumber}: ${currentCalibrationStep.joint} at ${currentCalibrationStep.angle}°`
+      );
+
+      // Create the message with step_number explicitly
+      const message = JSON.stringify({
+        type: "capture_position",
+        joint: currentCalibrationStep.joint,
+        angle: currentCalibrationStep.angle,
+        step_number: stepNumber,
+      });
+
+      console.log("Sending capture position message:", message);
+      wsRef.current.send(message);
+    }
+  }, [currentCalibrationStep]);
+
   // Manually reconnect WebSocket if we've been disconnected for too long
   useEffect(() => {
     let reconnectInterval: number | null = null;
@@ -480,13 +586,106 @@ function App() {
                 : "Disconnected"}
             </span>
           </div>
-          <button
-            onClick={handleCenterAll}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-xs transition-colors"
-          >
-            Center All
-          </button>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleCenterAll}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-xs transition-colors"
+              disabled={calibrationMode}
+            >
+              Center All
+            </button>
+            <button
+              onClick={handleCalibrateClick}
+              className="bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded text-xs transition-colors"
+              disabled={calibrationMode}
+            >
+              Calibrate
+            </button>
+          </div>
         </div>
+
+        {/* Calibration UI */}
+        {isCalibrating && currentCalibrationStep && (
+          <div className="bg-white/90 rounded-lg p-3 mb-2">
+            <h3 className="text-sm font-bold mb-2 text-gray-900">
+              Calibration In Progress
+            </h3>
+            <div className="mb-3">
+              <div className="flex justify-between text-xs text-gray-600 mb-1">
+                <span>
+                  Step {currentCalibrationStep.current_step} of{" "}
+                  {currentCalibrationStep.total_steps}
+                </span>
+                <span>
+                  {Math.round(
+                    ((currentCalibrationStep.current_step || 0) /
+                      (currentCalibrationStep.total_steps || 1)) *
+                      100
+                  )}
+                  %
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5">
+                <div
+                  className="bg-orange-500 h-1.5 rounded-full"
+                  style={{
+                    width: `${Math.round(
+                      ((currentCalibrationStep.current_step || 0) /
+                        (currentCalibrationStep.total_steps || 1)) *
+                        100
+                    )}%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="bg-gray-100 rounded p-2 mb-3">
+              <div className="flex justify-between mb-1">
+                <span className="text-xs font-medium">Current Joint:</span>
+                <span className="text-xs">{currentCalibrationStep.joint}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-xs font-medium">Target Angle:</span>
+                <span className="text-xs">{currentCalibrationStep.angle}°</span>
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-700 mb-3">
+              <p>1. Manually position the joint to the target angle</p>
+              <p>2. Click "Capture Position" when ready</p>
+            </div>
+
+            <button
+              onClick={handleCapturePosition}
+              className={`w-full ${
+                captureSuccess
+                  ? "bg-green-700 hover:bg-green-800"
+                  : "bg-green-500 hover:bg-green-600"
+              } text-white py-2 rounded font-medium text-sm transition-colors relative`}
+              disabled={captureSuccess}
+            >
+              {captureSuccess ? (
+                <span className="flex items-center justify-center">
+                  <svg
+                    className="w-4 h-4 mr-1"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                      clipRule="evenodd"
+                    ></path>
+                  </svg>
+                  Position Captured!
+                </span>
+              ) : (
+                "Capture Position"
+              )}
+            </button>
+          </div>
+        )}
 
         {/* Robot controls */}
         {robot ? (
@@ -496,6 +695,7 @@ function App() {
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             jointValues={jointAngles}
+            isCalibrating={isCalibrating}
           />
         ) : (
           <div className="bg-white/90 rounded-lg p-4 text-gray-800 font-medium">

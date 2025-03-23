@@ -22,6 +22,7 @@ import logging
 import uvicorn
 import asyncio
 from servo_controller import ServoController
+import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO,
@@ -49,6 +50,19 @@ active_ws_connections = set()
 
 # Track last broadcast positions to only send changes
 last_broadcast_positions = {}
+
+# Flag to indicate if calibration is in progress
+calibrating = False
+
+# Define servo IDs for simulation mode if they're not available
+SERVO_IDS = {
+    'base_yaw': 1, 
+    'pitch': 2, 
+    'pitch2': 3, 
+    'pitch3': 4, 
+    'roll': 5, 
+    'grip': 6
+}
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -91,7 +105,7 @@ asyncio.set_event_loop(loop)
 
 # Periodically broadcast servo positions to all connected WebSocket clients
 def broadcast_positions():
-    global last_broadcast_positions
+    global last_broadcast_positions, calibrating
     
     logger.info("Starting WebSocket broadcast thread")
     
@@ -105,6 +119,11 @@ def broadcast_positions():
     
     while True:
         try:
+            # Skip updates if calibration is in progress
+            if calibrating:
+                time.sleep(broadcast_interval)
+                continue
+                
             if manager.active_connections:
                 positions = {}
                 has_changes = False
@@ -159,6 +178,7 @@ async def get_index():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global calibrating
     await manager.connect(websocket)
     
     try:
@@ -241,6 +261,281 @@ async def websocket_endpoint(websocket: WebSocket):
                         'requestId': request_id,
                         'status': 'success'
                     }))
+                
+                elif data.get('type') == 'start_calibration':
+                    # Enter calibration mode
+                    calibrating = True
+                    logger.info("Entering calibration mode")
+                    
+                    if servo_controller and servo_controller._is_connected:
+                        # Disable torque on all servos
+                        servo_controller._write("Torque_Enable", 0)
+                        logger.info("Disabled torque on all servos for calibration")
+                        
+                        # Send acknowledgment that torque is released
+                        await websocket.send_text(json.dumps({
+                            'type': 'ack', 
+                            'message': 'torque_released'
+                        }))
+                        
+                        # Send first calibration step - waiting for UI to send capture commands
+                        try:
+                            # Initialize calibration data structure
+                            calibration_data = {}
+                            
+                            # Get all servo IDs and names
+                            servo_items = list(servo_controller.servos.items())
+                            
+                            # Send initial calibration step
+                            if servo_items:
+                                first_joint, first_id = servo_items[0]
+                                await websocket.send_text(json.dumps({
+                                    'type': 'calibration_step',
+                                    'joint': first_joint,
+                                    'angle': 0,
+                                    'total_steps': len(servo_items) * 3,
+                                    'current_step': 1
+                                }))
+                        except Exception as e:
+                            logger.error(f"Error starting calibration: {e}")
+                            logger.error(traceback.format_exc())
+                            await websocket.send_text(json.dumps({
+                                'type': 'error',
+                                'message': f'Calibration error: {str(e)}'
+                            }))
+                            calibrating = False
+                    else:
+                        # Simulation mode
+                        logger.info("WS Simulation: Would start calibration")
+                        
+                        # Send acknowledgment
+                        await websocket.send_text(json.dumps({
+                            'type': 'ack', 
+                            'message': 'torque_released'
+                        }))
+                        
+                        # Send first calibration step
+                        servo_names = ['base_yaw', 'pitch', 'pitch2', 'pitch3', 'roll', 'grip']
+                        angles = [0, 90, -90]  # Define the angle sequence explicitly
+                        first_step = 1
+                        
+                        logger.info(f"Starting calibration simulation with {len(servo_names)} joints, {len(angles)} angles per joint, total {len(servo_names) * len(angles)} steps")
+                        logger.info(f"First step: {first_step}/{len(servo_names) * len(angles)} - Joint: {servo_names[0]}, Angle: {angles[0]}°")
+                        
+                        await websocket.send_text(json.dumps({
+                            'type': 'calibration_step',
+                            'joint': servo_names[0],
+                            'angle': angles[0],
+                            'total_steps': len(servo_names) * len(angles),
+                            'current_step': first_step
+                        }))
+                
+                elif data.get('type') == 'capture_position':
+                    # Handle position capture for calibration
+                    if calibrating:
+                        joint_name = data.get('joint')
+                        angle = data.get('angle')
+                        step_number = data.get('step_number')
+                        
+                        logger.info(f"Capturing position for {joint_name} at {angle}° (step {step_number}) - Raw data: {data}")
+                        
+                        # Ensure step_number is an integer, default to 1 if missing
+                        if step_number is None:
+                            step_number = 1
+                            logger.warning(f"Missing step_number in capture_position request, defaulting to {step_number}")
+                        else:
+                            try:
+                                step_number = int(step_number)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid step_number format: {step_number}, defaulting to 1")
+                                step_number = 1
+                        
+                        logger.info(f"Processing capture for step {step_number}: {joint_name} at {angle}°")
+                        
+                        if servo_controller and servo_controller._is_connected:
+                            # Get the current position from the servo
+                            servo_id = servo_controller.servos.get(joint_name)
+                            if servo_id:
+                                position = servo_controller._read("Present_Position", [servo_id])[0]
+                                
+                                # Store calibration point
+                                if not hasattr(servo_controller, 'calibration_progress'):
+                                    servo_controller.calibration_progress = {}
+                                
+                                if str(servo_id) not in servo_controller.calibration_progress:
+                                    servo_controller.calibration_progress[str(servo_id)] = {}
+                                    
+                                # Save the position according to angle
+                                if angle == 0:
+                                    servo_controller.calibration_progress[str(servo_id)]["zero"] = int(position)
+                                elif angle == 90:
+                                    servo_controller.calibration_progress[str(servo_id)]["max"] = int(position)
+                                elif angle == -90:
+                                    servo_controller.calibration_progress[str(servo_id)]["min"] = int(position)
+                                
+                                # Notify UI of successful capture
+                                await websocket.send_text(json.dumps({
+                                    'type': 'position_captured',
+                                    'joint': joint_name,
+                                    'angle': angle,
+                                    'position': int(position)
+                                }))
+                                
+                                # Calculate next step - regardless of what the client sent, 
+                                # we know what the next step should be
+                                servo_items = list(servo_controller.servos.items())
+                                total_steps = len(servo_items) * 3
+                                
+                                # Move to next step - explicitly calculate based on current joint/angle
+                                current_joint_index = 0
+                                current_angle_index = 0
+                                angles = [0, 90, -90]  # Define the angle sequence
+                                
+                                # Find the current joint index in our list
+                                for i, (joint, _) in enumerate(servo_items):
+                                    if joint == joint_name:
+                                        current_joint_index = i
+                                        break
+                                
+                                # Find the current angle index
+                                for i, a in enumerate(angles):
+                                    if a == angle:
+                                        current_angle_index = i
+                                        break
+                                
+                                # Calculate the next angle index and joint index
+                                next_angle_index = (current_angle_index + 1) % len(angles)
+                                next_joint_index = current_joint_index
+                                
+                                # If we've gone through all angles for this joint, move to the next joint
+                                if next_angle_index == 0:
+                                    next_joint_index = current_joint_index + 1
+                                
+                                # Calculate the absolute step number
+                                next_step = next_joint_index * len(angles) + next_angle_index + 1
+                                
+                                logger.info(f"Calculated next step: {next_step}/{total_steps} - " +
+                                           f"joint_index={next_joint_index}, angle_index={next_angle_index}")
+                                
+                                if next_step <= total_steps:
+                                    if next_joint_index < len(servo_items):
+                                        next_joint, next_id = servo_items[next_joint_index]
+                                        next_angle = angles[next_angle_index]
+                                        
+                                        logger.info(f"Sending next step: {next_step}/{total_steps} - Joint: {next_joint}, Angle: {next_angle}°")
+                                        
+                                        # Send next calibration step
+                                        await websocket.send_text(json.dumps({
+                                            'type': 'calibration_step',
+                                            'joint': next_joint,
+                                            'angle': next_angle,
+                                            'total_steps': total_steps,
+                                            'current_step': next_step
+                                        }))
+                                else:
+                                    # All steps completed
+                                    # Save calibration data
+                                    servo_controller.calibration = servo_controller.calibration_progress
+                                    servo_controller.calibration["timestamp"] = datetime.datetime.now().isoformat()
+                                    
+                                    try:
+                                        with open(servo_controller.calibration_file, 'w') as f:
+                                            json.dump(servo_controller.calibration, f, indent=2)
+                                        logger.info(f"Saved calibration to {servo_controller.calibration_file}")
+                                    except Exception as e:
+                                        logger.error(f"Error saving calibration: {e}")
+                                    
+                                    # Re-enable torque
+                                    servo_controller._write("Torque_Enable", 1)
+                                    
+                                    # Send calibration complete
+                                    await websocket.send_text(json.dumps({
+                                        'type': 'calibration_complete',
+                                        'positions': servo_controller.get_angles()
+                                    }))
+                                    
+                                    # Reset calibration flag
+                                    calibrating = False
+                                    logger.info("Calibration completed successfully!")
+                        else:
+                            # Simulation mode
+                            # Log for debugging
+                            logger.info(f"Simulating position capture for {joint_name} at {angle}° (step {step_number})")
+                            
+                            # Send success message
+                            await websocket.send_text(json.dumps({
+                                'type': 'position_captured',
+                                'joint': joint_name,
+                                'angle': angle,
+                                'position': 2048  # Simulated center position
+                            }))
+                            
+                            # Calculate next step - same logic as above
+                            servo_items = list(SERVO_IDS.items())
+                            total_steps = len(servo_items) * 3
+                            
+                            # Move to next step - explicitly calculate based on current joint/angle
+                            current_joint_index = 0
+                            current_angle_index = 0
+                            angles = [0, 90, -90]  # Define the angle sequence
+                            
+                            # Find the current joint index in our list
+                            for i, (joint, _) in enumerate(servo_items):
+                                if joint == joint_name:
+                                    current_joint_index = i
+                                    break
+                            
+                            # Find the current angle index
+                            for i, a in enumerate(angles):
+                                if a == angle:
+                                    current_angle_index = i
+                                    break
+                            
+                            # Calculate the next angle index and joint index
+                            next_angle_index = (current_angle_index + 1) % len(angles)
+                            next_joint_index = current_joint_index
+                            
+                            # If we've gone through all angles for this joint, move to the next joint
+                            if next_angle_index == 0:
+                                next_joint_index = current_joint_index + 1
+                            
+                            # Calculate the absolute step number
+                            next_step = next_joint_index * len(angles) + next_angle_index + 1
+                            
+                            logger.info(f"Simulation - Calculated next step: {next_step}/{total_steps} - " +
+                                       f"joint_index={next_joint_index}, angle_index={next_angle_index}")
+                            
+                            if next_step <= total_steps:
+                                if next_joint_index < len(servo_items):
+                                    next_joint, next_id = servo_items[next_joint_index]
+                                    next_angle = angles[next_angle_index]
+                                    
+                                    logger.info(f"Simulation - Sending next step: {next_step}/{total_steps} - Joint: {next_joint}, Angle: {next_angle}°")
+                                    
+                                    # Send next calibration step
+                                    await websocket.send_text(json.dumps({
+                                        'type': 'calibration_step',
+                                        'joint': next_joint,
+                                        'angle': next_angle,
+                                        'total_steps': total_steps,
+                                        'current_step': next_step
+                                    }))
+                            else:
+                                # All steps completed - send complete message
+                                await websocket.send_text(json.dumps({
+                                    'type': 'calibration_complete',
+                                    'positions': last_known_positions
+                                }))
+                                
+                                # Reset calibration flag
+                                calibrating = False
+                                logger.info("Simulation: Calibration completed successfully!")
+                    else:
+                        # Not in calibration mode
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': 'Not in calibration mode'
+                        }))
                 
                 elif data.get('type') == 'get_positions':
                     # Get current positions
