@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
+import { getServoPositions, WS_URL } from "./services/ServoAPI";
 
 // Map from joint names to servo IDs
 // These need to match the actual joint names in the URDF model
@@ -9,8 +10,8 @@ const JOINT_TO_SERVO_MAP: Record<string, string> = {
   "2-servo_2-pitch": "pitch",
   "3-servo_3-pitch": "pitch2",
   "4-servo_4-pitch": "pitch3",
-  "5-servo_5-roll": "pitch4",
-  "6-servo_6-pitch": "pitch5",
+  "5-servo_5-roll": "roll",
+  "6-servo_6-grip": "grip",
 };
 
 // Map from servo IDs to joint names
@@ -68,6 +69,8 @@ function App() {
     // Log joint names for debugging
     if (loadedRobot && loadedRobot.joints) {
       console.log("Available joints:", Object.keys(loadedRobot.joints));
+      console.log("Servo to joint mapping:", SERVO_TO_JOINT_MAP);
+
       // Check if our joint mapping has the correct names
       Object.keys(JOINT_TO_SERVO_MAP).forEach((jointName) => {
         if (!loadedRobot.joints[jointName]) {
@@ -132,8 +135,8 @@ function App() {
 
     // Create new connection
     try {
-      console.log("Creating new WebSocket connection");
-      const ws = new WebSocket("ws://localhost:1212/ws");
+      console.log("Creating new WebSocket connection to", WS_URL);
+      const ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
         console.log("WebSocket connection established");
@@ -144,13 +147,10 @@ function App() {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (
-            data.type === "servo_positions" &&
-            data.positions &&
-            !isDraggingRef.current
-          ) {
-            // Skip updates while user is dragging a slider
+          if (data.type === "servo_positions" && data.positions) {
+            // Skip updates entirely while user is dragging a slider
             if (isDraggingRef.current) {
+              console.log("Ignoring server position update during slider drag");
               return;
             }
 
@@ -177,22 +177,21 @@ function App() {
                     robotRef.current.setJointValue(jointName, newRadians);
 
                     // Update our joint angle state only if it changed significantly
-                    if (
-                      Math.abs((newAngles[jointName] || 0) - newRadians) > 0.01
-                    ) {
+                    if (Math.abs(newAngles[jointName] - newRadians) > 0.01) {
                       newAngles[jointName] = newRadians;
                       hasChanges = true;
                     }
                   }
                 });
 
-                // Only update state if something changed
+                // Only update state if there were actual changes
                 if (hasChanges) {
-                  lastUpdateTimeRef.current = now;
                   setJointAngles(newAngles);
                 }
 
-                // Re-enable sending updates to server after a short delay
+                lastUpdateTimeRef.current = now;
+
+                // Schedule re-enabling updates
                 setTimeout(() => {
                   updatingFromServer.current = false;
                 }, 100);
@@ -202,8 +201,8 @@ function App() {
             // Server acknowledged our message
             updateConnectionStatus("connected");
           }
-        } catch (err) {
-          console.error("Error parsing WebSocket message:", err);
+        } catch (error: unknown) {
+          console.error("Error processing WebSocket message:", error);
         }
       };
 
@@ -257,6 +256,43 @@ function App() {
   useEffect(() => {
     // Mark that we're in the mounting phase
     isMountingRef.current = true;
+
+    // Fetch initial servo positions via HTTP API when component mounts
+    const fetchInitialPositions = async () => {
+      try {
+        const positions = await getServoPositions();
+
+        // Only update if we have a robot and positions
+        if (robotRef.current && positions) {
+          updatingFromServer.current = true;
+
+          // Update the 3D model with initial positions
+          Object.entries(positions).forEach(([servoId, degrees]) => {
+            const jointName = SERVO_TO_JOINT_MAP[servoId];
+            if (jointName && robotRef.current.joints[jointName]) {
+              // Convert degrees to radians for 3D model
+              const radians = ((degrees as number) * Math.PI) / 180;
+              robotRef.current.setJointValue(jointName, radians);
+
+              // Update joint angles state
+              setJointAngles((prev) => ({
+                ...prev,
+                [jointName]: radians,
+              }));
+            }
+          });
+
+          setTimeout(() => {
+            updatingFromServer.current = false;
+          }, 100);
+        }
+      } catch (error) {
+        console.error("Failed to fetch initial positions:", error);
+      }
+    };
+
+    // Fetch initial positions
+    fetchInitialPositions();
 
     // Delay initial connection to avoid issues with React StrictMode double mounting
     const initialConnectionTimeout = setTimeout(() => {
@@ -335,10 +371,12 @@ function App() {
 
   // Handle drag start/end to prevent WebSocket updates during slider interaction
   const handleDragStart = useCallback(() => {
+    console.log("Drag started, disabling position sync from server");
     isDraggingRef.current = true;
   }, []);
 
   const handleDragEnd = useCallback(() => {
+    console.log("Drag ended, enabling position sync from server");
     isDraggingRef.current = false;
   }, []);
 

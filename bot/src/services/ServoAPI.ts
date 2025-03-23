@@ -5,14 +5,16 @@
 
 // Define the API base URL - defaults to localhost:1212 (matches server.py default)
 const API_BASE_URL = "http://localhost:1212/api/servo";
+// Define the WebSocket URL for real-time servo updates
+export const WS_URL = "ws://localhost:1212/ws";
 
 export interface ServoPositions {
   base_yaw: number;
   pitch: number;
   pitch2: number;
   pitch3: number;
-  pitch4: number;
-  pitch5: number;
+  roll: number;
+  grip: number;
   [key: string]: number; // Index signature for dynamic access
 }
 
