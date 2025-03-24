@@ -86,7 +86,7 @@ class Servos:
             self.connected = True
             print(f"Connected on {self.port}")
             self._configure_servos()
-            self.enable_torque()
+            self.set_torque_enabled(True)
         
         except Exception as e:
             if hasattr(self, 'port_handler') and self.port_handler:
@@ -99,7 +99,7 @@ class Servos:
         
         # Disable torque when disconnecting
         if self.torque_enabled:
-            self.disable_torque()
+            self.set_torque_enabled(False)
             
         time.sleep(0.1)
             
@@ -111,20 +111,15 @@ class Servos:
         self.connected = False
         print("Disconnected")
 
-    # Core servo control functions
-    def enable_torque(self):
+    def get_torque_enabled(self):
         assert self.connected, "Not connected to servos. Call connect() first."
-            
-        self._write("Torque_Enable", 1)
-        self.torque_enabled = True
-        print("Torque enabled")
-        
-    def disable_torque(self):
+        return self.torque_enabled
+    
+    def set_torque_enabled(self, enabled):
         assert self.connected, "Not connected to servos. Call connect() first."
-            
-        self._write("Torque_Enable", 0)
-        self.torque_enabled = False
-        print("Torque disabled")
+        self._write("Torque_Enable", 1 if enabled else 0)
+        self.torque_enabled = enabled
+        print(f"Torque {'enabled' if enabled else 'disabled'}")
         
     def get_positions(self):
         assert self.connected, "Not connected to servos. Call connect() first."
@@ -189,7 +184,7 @@ class Servos:
         
         # Always disable torque during calibration
         if self.torque_enabled:
-            self.disable_torque()
+            self.set_torque_enabled(False)
             
         print("Calibration started. Torque disabled.")
         
@@ -245,8 +240,8 @@ class Servos:
         self.calibration = self._load_calibration()
         self.is_calibrated = bool(self.calibration)
 
-        self.enable_torque()
-        
+        self.set_torque_enabled(True)
+
         
     def cancel_calibration(self):
         if not self.calibration_mode:
@@ -257,6 +252,8 @@ class Servos:
         self.temp_calibration_data = {}
         self.calibration_mode = False
         print("Calibration cancelled")
+
+        self.set_torque_enabled(True)
         
     def set_calibration_point(self, servo_id, point_name, position=None): 
         assert self.connected, "Not connected to servos. Call connect() first."

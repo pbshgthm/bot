@@ -15,6 +15,7 @@ interface RobotControlsProps {
   onDragEnd?: () => void;
   jointValues?: Record<string, number>;
   isCalibrating?: boolean;
+  torqueEnabled?: boolean;
 }
 
 // Joint slider component with minimalist design
@@ -24,11 +25,13 @@ const JointSlider = memo(
     onChange,
     onDragStart,
     onDragEnd,
+    torqueEnabled = true,
   }: {
     joint: JointControl;
     onChange: (joint: JointControl, value: number) => void;
     onDragStart?: () => void;
     onDragEnd?: () => void;
+    torqueEnabled?: boolean;
   }) => {
     // Only show for adjustable joints
     if (
@@ -53,12 +56,33 @@ const JointSlider = memo(
     return (
       <li key={joint.name} className="mb-3">
         <div className="flex items-center justify-between mb-0.5">
-          <span
-            className="font-medium text-xs text-gray-900 truncate"
-            title={joint.name}
-          >
-            {joint.name}
-          </span>
+          <div className="flex items-center">
+            <span
+              className="font-medium text-xs text-gray-900 truncate"
+              title={joint.name}
+            >
+              {joint.name}
+            </span>
+            {!torqueEnabled && (
+              <span
+                className="ml-1.5 inline-flex items-center text-red-500"
+                title="Read-only: Torque disabled"
+              >
+                <svg
+                  className="w-3 h-3"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z"
+                    clipRule="evenodd"
+                  ></path>
+                </svg>
+              </span>
+            )}
+          </div>
           <span className="text-xs text-gray-600 font-mono">
             {((joint.value * 180) / Math.PI).toFixed(1)}°
           </span>
@@ -72,27 +96,36 @@ const JointSlider = memo(
             max={maxDeg}
             step="0.1"
             value={(joint.value * 180) / Math.PI}
-            onChange={(e) => onChange(joint, parseFloat(e.target.value))}
-            onMouseDown={() => onDragStart?.()}
-            onTouchStart={() => onDragStart?.()}
-            onMouseUp={() => onDragEnd?.()}
-            onTouchEnd={() => onDragEnd?.()}
+            onChange={(e) =>
+              torqueEnabled && onChange(joint, parseFloat(e.target.value))
+            }
+            onMouseDown={() => torqueEnabled && onDragStart?.()}
+            onTouchStart={() => torqueEnabled && onDragStart?.()}
+            onMouseUp={() => torqueEnabled && onDragEnd?.()}
+            onTouchEnd={() => torqueEnabled && onDragEnd?.()}
             onMouseLeave={(e) => {
               // Only trigger dragEnd if the primary button is still pressed
-              if (e.buttons === 1) onDragEnd?.();
+              if (e.buttons === 1 && torqueEnabled) onDragEnd?.();
             }}
-            className="w-full h-1.5 appearance-none bg-gray-200 rounded-full outline-none cursor-pointer slider-input"
+            className={`w-full h-1.5 appearance-none bg-gray-200 rounded-full outline-none ${
+              torqueEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+            } slider-input`}
             style={{
               WebkitAppearance: "none",
             }}
+            disabled={!torqueEnabled}
           />
 
           {/* Tick marks with clickable areas - showing min, center, max */}
           <div className="absolute bottom-0 left-0 w-full flex justify-between px-0.5">
             {/* Min tick */}
             <div
-              className="flex flex-col items-center cursor-pointer group"
-              onClick={() => onChange(joint, minDeg)}
+              className={`flex flex-col items-center ${
+                torqueEnabled
+                  ? "cursor-pointer group"
+                  : "cursor-not-allowed opacity-70"
+              }`}
+              onClick={() => torqueEnabled && onChange(joint, minDeg)}
               style={{ width: "20px" }}
             >
               <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
@@ -106,8 +139,12 @@ const JointSlider = memo(
 
             {/* Center tick */}
             <div
-              className="flex flex-col items-center cursor-pointer group"
-              onClick={() => onChange(joint, centerDeg)}
+              className={`flex flex-col items-center ${
+                torqueEnabled
+                  ? "cursor-pointer group"
+                  : "cursor-not-allowed opacity-70"
+              }`}
+              onClick={() => torqueEnabled && onChange(joint, centerDeg)}
               style={{ width: "20px" }}
             >
               <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
@@ -118,8 +155,12 @@ const JointSlider = memo(
 
             {/* Max tick */}
             <div
-              className="flex flex-col items-center cursor-pointer group"
-              onClick={() => onChange(joint, maxDeg)}
+              className={`flex flex-col items-center ${
+                torqueEnabled
+                  ? "cursor-pointer group"
+                  : "cursor-not-allowed opacity-70"
+              }`}
+              onClick={() => torqueEnabled && onChange(joint, maxDeg)}
               style={{ width: "20px" }}
             >
               <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
@@ -162,6 +203,20 @@ const globalStyles = `
     border: none;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   }
+  
+  .slider-input:disabled::-webkit-slider-thumb {
+    background: #9ca3af;
+    cursor: not-allowed;
+  }
+  
+  .slider-input:disabled::-moz-range-thumb {
+    background: #9ca3af;
+    cursor: not-allowed;
+  }
+  
+  .slider-input:disabled {
+    opacity: 0.7;
+  }
 `;
 
 const RobotControls = ({
@@ -171,6 +226,7 @@ const RobotControls = ({
   onDragEnd,
   jointValues = {},
   isCalibrating,
+  torqueEnabled = true,
 }: RobotControlsProps) => {
   const [joints, setJoints] = useState<JointControl[]>([]);
 
@@ -277,21 +333,43 @@ const RobotControls = ({
         <div className="text-center p-4 text-orange-600 font-medium">
           Calibration in progress. Sliders disabled.
         </div>
-      ) : (
-        <ul className="flex flex-col space-y-1">
-          {joints
-            .filter((joint) => joint.type !== "fixed")
-            .map((joint) => (
-              <JointSlider
-                key={joint.name}
-                joint={joint}
-                onChange={handleSliderChange}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
-              />
-            ))}
-        </ul>
-      )}
+      ) : !torqueEnabled ? (
+        <div className="text-center p-2 mb-3 bg-red-50 border border-red-200 rounded-md">
+          <div className="flex items-center justify-center mb-1">
+            <svg
+              className="w-4 h-4 text-red-500 mr-1.5"
+              fill="currentColor"
+              viewBox="0 0 20 20"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                fillRule="evenodd"
+                d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
+                clipRule="evenodd"
+              ></path>
+            </svg>
+            <span className="text-red-600 font-medium">Torque Disabled</span>
+          </div>
+          <p className="text-xs text-red-600">
+            Sliders are in read-only mode. Enable torque to control the robot.
+          </p>
+        </div>
+      ) : null}
+
+      <ul className="flex flex-col space-y-1">
+        {joints
+          .filter((joint) => joint.type !== "fixed")
+          .map((joint) => (
+            <JointSlider
+              key={joint.name}
+              joint={joint}
+              onChange={handleSliderChange}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              torqueEnabled={torqueEnabled}
+            />
+          ))}
+      </ul>
     </div>
   );
 };

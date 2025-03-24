@@ -129,10 +129,21 @@ const sendWebSocketRequest = async (request: any): Promise<any> => {
     pendingRequests.set(requestId, { resolve, reject });
 
     // Set a timeout to clean up abandoned requests
-    // Use longer timeout for calibration-related requests
+    // Use longer timeout for specific request types
+    const isTorqueRequest =
+      request.type &&
+      (request.type === "get_torque_enabled" ||
+        request.type === "set_torque_enabled");
     const isCalibrationRequest =
       request.type && request.type.includes("calibration");
-    const timeoutMs = isCalibrationRequest ? 30000 : 10000; // 30 seconds for calibration, 10 seconds for others
+
+    // Longer timeouts for special operations
+    let timeoutMs = 10000; // Default: 10 seconds
+    if (isCalibrationRequest) {
+      timeoutMs = 30000; // 30 seconds for calibration
+    } else if (isTorqueRequest) {
+      timeoutMs = 15000; // 15 seconds for torque operations
+    }
 
     setTimeout(() => {
       if (pendingRequests.has(requestId)) {
@@ -342,6 +353,46 @@ export const endCalibration = async (): Promise<{ success: boolean }> => {
     return { success: true };
   } catch (error) {
     console.error("Failed to end calibration:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get current torque enabled status
+ * @returns Promise with torque status
+ */
+export const getTorqueEnabled = async (): Promise<boolean> => {
+  try {
+    // Request torque status via WebSocket
+    const response = await sendWebSocketRequest({
+      type: "get_torque_enabled",
+    });
+
+    return response.enabled;
+  } catch (error) {
+    console.error("Failed to get torque status:", error);
+    throw error;
+  }
+};
+
+/**
+ * Set torque enabled status for all servos
+ * @param enabled - Whether to enable or disable torque
+ * @returns Promise indicating success
+ */
+export const setTorqueEnabled = async (
+  enabled: boolean
+): Promise<{ success: boolean }> => {
+  try {
+    // Send torque command via WebSocket
+    await sendWebSocketRequest({
+      type: "set_torque_enabled",
+      enabled: enabled,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to set torque status:", error);
     throw error;
   }
 };

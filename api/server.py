@@ -261,6 +261,36 @@ async def websocket_endpoint(websocket: WebSocket):
                     }))
                     print(f"Sent calibration_completed acknowledgment")
             
+            elif data.get('type') == 'cancel_calibration':
+                # Handle canceling calibration and returning to normal operation
+                if is_calibrating and servo_controller and servo_controller.connected:
+                    is_calibrating = False
+                    print(f"Canceling calibration mode, is_calibrating={is_calibrating}")
+                    
+                    # Cancel calibration in the servo controller
+                    servo_controller.cancel_calibration()
+                    
+                    # Re-enable torque
+                    servo_controller.set_torque_enabled(True)
+                    
+                    # Get current positions to send back to client
+                    positions = servo_controller.get_angles()
+                    
+                    # Send acknowledgment with current positions
+                    await websocket.send_text(json.dumps({
+                        'type': 'calibration_canceled',
+                        'requestId': request_id,
+                        'positions': positions,
+                        'message': 'Calibration canceled'
+                    }))
+                    print(f"Sent calibration_canceled with current positions")
+                else:
+                    await websocket.send_text(json.dumps({
+                        'type': 'ack',
+                        'requestId': request_id,
+                        'message': 'Not in calibration mode'
+                    }))
+            
             elif data.get('type') == 'get_positions':
                 if servo_controller and servo_controller.connected:
                     positions = servo_controller.get_angles()
@@ -271,6 +301,48 @@ async def websocket_endpoint(websocket: WebSocket):
                         'positions': positions
                     }))
                     
+            elif data.get('type') == 'get_torque_enabled':
+                if servo_controller and servo_controller.connected:
+                    enabled = servo_controller.get_torque_enabled()
+                    await websocket.send_text(json.dumps({
+                        'type': 'torque_status',
+                        'requestId': request_id,
+                        'enabled': enabled
+                    }))
+                    print(f"Sent torque status: {enabled}")
+                else:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'requestId': request_id,
+                        'message': 'Servo controller is not connected'
+                    }))
+                    
+            elif data.get('type') == 'set_torque_enabled':
+                if servo_controller and servo_controller.connected:
+                    enabled = data.get('enabled', True)
+                    servo_controller.set_torque_enabled(enabled)
+                    await websocket.send_text(json.dumps({
+                        'type': 'torque_status',
+                        'requestId': request_id,
+                        'enabled': enabled
+                    }))
+                    print(f"Set torque enabled: {enabled}")
+                else:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'requestId': request_id,
+                        'message': 'Servo controller is not connected'
+                    }))
+                    
+            else:
+                # Unknown message type
+                print(f"Unknown WebSocket message type: {data.get('type')}")
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'requestId': request_id,
+                    'message': 'Unknown message type'
+                }))
+            
     except WebSocketDisconnect:
         # Reset calibration flag if client disconnects during calibration
         if is_calibrating:

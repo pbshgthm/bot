@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import CalibrationUI from "./components/CalibrationUI";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
 import {
   WS_URL,
-  captureCalibrationPosition,
   centerAllServos,
-  endCalibration,
+  getTorqueEnabled,
   setCalibrationStep,
+  setTorqueEnabled,
   startCalibration,
   updateServoPosition,
 } from "./services/ServoAPI";
@@ -21,29 +22,11 @@ const JOINT_TO_SERVO_ID: Record<string, number> = {
   "6-servo_6-grip": 6,
 };
 
-// Display names for joints (optional, for UI display only)
-const JOINT_DISPLAY_NAMES: Record<string, string> = {
-  "1-servo_1-yaw": "Base Yaw",
-  "2-servo_2-pitch": "Pitch",
-  "3-servo_3-pitch": "Pitch 2",
-  "4-servo_4-pitch": "Pitch 3",
-  "5-servo_5-roll": "Roll",
-  "6-servo_6-grip": "Grip",
-};
-
 // Helper function to find a joint name by servo ID (for consistent lookup)
 const getJointNameById = (servoId: number): string | undefined => {
   return Object.entries(JOINT_TO_SERVO_ID).find(
     ([_, id]) => id === servoId
   )?.[0];
-};
-
-// Helper function to get a display name for a joint (for UI)
-const getJointDisplayName = (servoId: number): string => {
-  const jointName = getJointNameById(servoId);
-  return jointName
-    ? JOINT_DISPLAY_NAMES[jointName] || jointName
-    : `Servo ${servoId}`;
 };
 
 function App() {
@@ -82,10 +65,8 @@ function App() {
     current_step?: number;
     total_steps?: number;
   } | null>(null);
-  const [captureSuccess, setCaptureSuccess] = useState(false);
-  // Add calibration state variables
-  const [allServoIds, setAllServoIds] = useState<number[]>([]);
-  const calibrationAngles = [0, 90, -90]; // Zero, max, min
+  // Torque enabled state
+  const [torqueEnabled, setTorqueEnabledState] = useState(true);
 
   // Initialize joint angles from URDF model
   useEffect(() => {
@@ -132,14 +113,13 @@ function App() {
       }
     },
     []
-  ); // Remove serverStatus dependency to break cycle
+  );
 
   // Set up WebSocket connection
   const setupWebSocket = useCallback(() => {
     // Prevent rapid reconnection attempts
     const now = Date.now();
     if (now - lastConnectionAttemptRef.current < 1000) {
-      console.log("Throttling connection attempts");
       return;
     }
     lastConnectionAttemptRef.current = now;
@@ -151,7 +131,6 @@ function App() {
 
     // If we're currently in a React double-mount cycle, don't create a new connection yet
     if (isMountingRef.current) {
-      console.log("Skipping WebSocket setup during mounting phase");
       return;
     }
 
@@ -168,18 +147,15 @@ function App() {
 
     // Create new connection
     try {
-      console.log("Creating new WebSocket connection to", WS_URL);
       const ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
-        console.log("WebSocket connection established");
         reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
         updateConnectionStatus("connected");
       };
 
       ws.onmessage = (event) => {
         try {
-          console.log(`WebSocket message received: ${event.data}`);
           const data = JSON.parse(event.data);
           const lastUpdateTime = lastUpdateTimeRef.current;
           const currentTime = Date.now();
@@ -188,6 +164,7 @@ function App() {
           if (
             data.type === "servo_positions" &&
             data.positions &&
+            !isDraggingRef.current &&
             !updatingFromServer.current &&
             currentTime - lastUpdateTime >= throttleTimeMs
           ) {
@@ -195,7 +172,6 @@ function App() {
             lastUpdateTimeRef.current = currentTime;
 
             if (robotRef.current) {
-              console.log("Received servo positions:", data.positions);
               updatingFromServer.current = true;
 
               // Update each joint in the 3D model based on servo ID
@@ -252,198 +228,78 @@ function App() {
               }, 50);
             }
           } else if (data.type === "calibration_started") {
-            console.log("Calibration started message received:", data);
             setCalibrationMode(true);
             setIsCalibrating(true);
 
-            // Initialize list of servo IDs if not already set
-            if (allServoIds.length === 0) {
-              // We need to extract all available servo IDs
-              const servoIds = Object.values(JOINT_TO_SERVO_ID);
-              console.log("Setting up calibration with servo IDs:", servoIds);
-              setAllServoIds(servoIds as number[]);
+            // Start with the first step
+            const servoIds = Object.values(JOINT_TO_SERVO_ID) as number[];
+            if (servoIds.length > 0) {
+              const firstServoId = servoIds[0];
+              const angles = [0, 90, -90]; // Zero, max, min
+              const firstAngle = angles[0];
+              const totalSteps = servoIds.length * angles.length;
 
-              // Start with the first step
-              if (servoIds.length > 0) {
-                const firstServoId = servoIds[0];
-                const firstAngle = calibrationAngles[0];
-                const totalSteps = servoIds.length * calibrationAngles.length;
-
-                console.log(`Initializing first calibration step:`);
-                console.log(
-                  `- Joint: ${getJointDisplayName(
-                    firstServoId
-                  )} (ID: ${firstServoId})`
-                );
-                console.log(`- Angle: ${firstAngle}°`);
-                console.log(`- Total steps: ${totalSteps}`);
-
-                // Set up the first calibration step
-                setCurrentCalibrationStep({
-                  joint: String(firstServoId),
-                  angle: firstAngle,
-                  current_step: 1,
-                  total_steps: totalSteps,
-                });
-
-                // Send the first step to the server
-                setCalibrationStep(firstServoId, firstAngle, 1, totalSteps)
-                  .then(() => {
-                    console.log(
-                      "First calibration step sent successfully to server"
-                    );
-                  })
-                  .catch((error) =>
-                    console.error(
-                      "Failed to set first calibration step:",
-                      error
-                    )
-                  );
-              } else {
-                console.error("No servo IDs found for calibration!");
-              }
-            } else {
-              console.log("Servo IDs already set:", allServoIds);
-            }
-
-            // Reset all joints to zero in the 3D model at start of calibration
-            if (robotRef.current) {
-              console.log("Resetting all joints to zero for calibration start");
-              Object.keys(robotRef.current.joints).forEach((jointName) => {
-                robotRef.current.setJointValue(jointName, 0);
+              // Set up the first calibration step
+              setCurrentCalibrationStep({
+                joint: String(firstServoId),
+                angle: firstAngle,
+                current_step: 1,
+                total_steps: totalSteps,
               });
 
-              setJointAngles((prev) => {
-                const newAngles = { ...prev };
-                Object.keys(robotRef.current.joints).forEach((jointName) => {
-                  newAngles[jointName] = 0;
-                });
-                return newAngles;
-              });
-            }
-          } else if (data.type === "calibration_step_ack") {
-            // Server acknowledged our calibration step
-            console.log("Calibration step acknowledged:", data);
-          } else if (data.type === "position_captured") {
-            // Position captured, proceed to next step
-            console.log("Position captured:", data);
-            const { joint, angle } = data;
-            const servoId = Number(joint);
-            const displayName = getJointDisplayName(servoId);
-
-            console.log(
-              `Position captured for ${displayName} at ${angle}°: ${data.position}`
-            );
-
-            // Show visual feedback
-            setCaptureSuccess(true);
-            setTimeout(() => setCaptureSuccess(false), 1500);
-
-            // DIRECT IMPLEMENTATION: Use the servo IDs from JOINT_TO_SERVO_ID and fixed angles
-            const allServos = Object.values(JOINT_TO_SERVO_ID) as number[];
-            const allAngles = [0, 90, -90]; // Zero, max, min
-            console.log("Direct implementation using:", {
-              allServos,
-              allAngles,
-            });
-
-            // Find the current position in the sequence
-            const currentServoId = Number(joint);
-            const currentAngle = angle;
-            let currentServoIndex = allServos.findIndex(
-              (id) => id === currentServoId
-            );
-            let currentAngleIndex = allAngles.findIndex(
-              (a) => a === currentAngle
-            );
-
-            console.log("Current position:", {
-              currentServoId,
-              currentAngle,
-              currentServoIndex,
-              currentAngleIndex,
-            });
-
-            if (currentServoIndex >= 0 && currentAngleIndex >= 0) {
-              // Calculate next position
-              let nextAngleIndex = (currentAngleIndex + 1) % allAngles.length;
-              let nextServoIndex = currentServoIndex;
-
-              // If we've gone through all angles for this joint, move to the next joint
-              if (nextAngleIndex === 0) {
-                nextServoIndex = (currentServoIndex + 1) % allServos.length;
-              }
-
-              // Check if we've completed the full cycle
-              if (
-                nextServoIndex === 0 &&
-                nextAngleIndex === 0 &&
-                (currentServoIndex > 0 || currentAngleIndex > 0)
-              ) {
-                // We've completed the full cycle
-                console.log("Calibration complete, sending end_calibration");
-                endCalibration()
-                  .then(() => {
-                    setIsCalibrating(false);
-                    setCurrentCalibrationStep(null);
-                    setCalibrationMode(false);
-                  })
-                  .catch((error) =>
-                    console.error("Failed to end calibration:", error)
-                  );
-              } else {
-                // Move to the next step
-                const nextServoId = allServos[nextServoIndex];
-                const nextAngle = allAngles[nextAngleIndex];
-                const totalSteps = allServos.length * allAngles.length;
-                const nextStep =
-                  nextServoIndex * allAngles.length + nextAngleIndex + 1;
-
-                console.log(
-                  `NEXT STEP: Servo ${nextServoId} at ${nextAngle}° (Step ${nextStep}/${totalSteps})`
-                );
-
-                // Update UI state
-                setCurrentCalibrationStep({
-                  joint: String(nextServoId),
-                  angle: nextAngle,
-                  current_step: nextStep,
-                  total_steps: totalSteps,
-                });
-
-                // Send to server
-                setCalibrationStep(nextServoId, nextAngle, nextStep, totalSteps)
-                  .then(() => {
-                    console.log(
-                      `Successfully set next calibration step: Servo ${nextServoId} at ${nextAngle}°`
-                    );
-                  })
-                  .catch((error) => {
-                    console.error(
-                      "Failed to set next calibration step:",
-                      error
-                    );
-                    alert(
-                      "Failed to move to next calibration step. Check console for details."
-                    );
-                  });
-              }
-            } else {
-              console.error("Invalid current position:", {
-                currentServoId,
-                currentAngle,
-                currentServoIndex,
-                currentAngleIndex,
-              });
+              // Send the first step to the server
+              setCalibrationStep(firstServoId, firstAngle, 1, totalSteps);
             }
           } else if (data.type === "calibration_completed") {
-            console.log("Calibration completed:", data);
             setIsCalibrating(false);
             setCurrentCalibrationStep(null);
             setCalibrationMode(false);
-          } else if (data.type === "error") {
-            console.error("Received error from server:", data.message);
-            // Could show an error message to the user here
+          } else if (data.type === "calibration_canceled") {
+            // Handle calibration cancellation response with current positions
+            setIsCalibrating(false);
+            setCurrentCalibrationStep(null);
+            setCalibrationMode(false);
+
+            console.log(
+              "Received calibration_canceled with positions:",
+              data.positions
+            );
+
+            // Update robot model with current positions
+            if (robotRef.current && data.positions) {
+              updatingFromServer.current = true;
+
+              // Update each joint in the 3D model based on servo ID
+              Object.entries(data.positions).forEach(
+                ([servoIdStr, degrees]) => {
+                  const servoId = Number(servoIdStr);
+                  const jointName = getJointNameById(servoId);
+
+                  if (jointName && robotRef.current?.joints[jointName]) {
+                    // Ensure we're working with a number
+                    const degreeValue =
+                      typeof degrees === "number"
+                        ? degrees
+                        : parseFloat(String(degrees));
+                    const radians = (degreeValue * Math.PI) / 180;
+
+                    // Update the 3D model joint
+                    robotRef.current.setJointValue(jointName, radians);
+
+                    // Also update our local state
+                    setJointAngles((prev) => ({
+                      ...prev,
+                      [jointName]: radians,
+                    }));
+                  }
+                }
+              );
+
+              // Reset updating flag after a short delay
+              setTimeout(() => {
+                updatingFromServer.current = false;
+              }, 50);
+            }
           }
         } catch (error: unknown) {
           console.error("Error processing WebSocket message:", error);
@@ -451,9 +307,6 @@ function App() {
       };
 
       ws.onclose = (event) => {
-        console.log(
-          `WebSocket connection closed (code: ${event.code}, reason: ${event.reason})`
-        );
         updateConnectionStatus("disconnected");
 
         // Don't automatically reconnect for clean closes or during mounting phase
@@ -469,7 +322,6 @@ function App() {
             1000 * Math.pow(1.5, reconnectAttemptsRef.current),
             10000
           );
-          console.log(`Attempting to reconnect in ${delay / 1000} seconds...`);
 
           if (reconnectTimeoutRef.current) {
             window.clearTimeout(reconnectTimeoutRef.current);
@@ -482,8 +334,7 @@ function App() {
         }
       };
 
-      ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
+      ws.onerror = () => {
         updateConnectionStatus("disconnected");
         // No need to handle reconnection here - will be handled in onclose
       };
@@ -491,17 +342,14 @@ function App() {
       // Store the WebSocket connection
       wsRef.current = ws;
     } catch (error) {
-      console.error("Failed to create WebSocket:", error);
       updateConnectionStatus("disconnected");
     }
-  }, [updateConnectionStatus, calibrationAngles]);
+  }, [updateConnectionStatus]);
 
   // Initialize WebSocket connection with protection against React's double-mount behavior
   useEffect(() => {
     // Mark that we're in the mounting phase
     isMountingRef.current = true;
-
-    // No need to fetch initial positions via HTTP API - will be received via WebSocket
 
     // Delay initial connection to avoid issues with React StrictMode double mounting
     const initialConnectionTimeout = setTimeout(() => {
@@ -526,20 +374,75 @@ function App() {
       // Mark that we're not in mounting phase anymore
       isMountingRef.current = false;
     };
-  }, []); // Remove setupWebSocket dependency
+  }, []);
+
+  // Fetch torque status when connected
+  useEffect(() => {
+    if (serverStatus === "connected" && !isMountingRef.current) {
+      // Get initial torque state
+      getTorqueEnabled()
+        .then((enabled) => {
+          setTorqueEnabledState(enabled);
+        })
+        .catch(() => {
+          console.error("Failed to get torque status");
+        });
+    }
+  }, [serverStatus]);
+
+  // Handle torque toggle
+  const handleTorqueToggle = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const newTorqueState = !torqueEnabled;
+
+      // Show a loading indicator or disable UI interaction here if needed
+
+      setTorqueEnabled(newTorqueState)
+        .then(() => {
+          setTorqueEnabledState(newTorqueState);
+          console.log(
+            `Torque ${newTorqueState ? "enabled" : "disabled"} successfully`
+          );
+        })
+        .catch((error) => {
+          console.error(`Failed to toggle torque: ${error.message}`);
+
+          // Revert the toggle in UI if the server request failed
+          // This ensures the UI stays in sync with the actual server state
+          alert(
+            `Failed to toggle torque: ${error.message}. The robot's state may be out of sync.`
+          );
+
+          // Only update connection status if it's a connection error, not a timeout
+          if (error.message.includes("timeout")) {
+            console.warn(
+              "Torque command timed out - server might be busy or processing another command"
+            );
+          } else {
+            updateConnectionStatus("disconnected");
+          }
+        });
+    } else {
+      updateConnectionStatus("disconnected");
+      alert("Cannot toggle torque - server connection lost");
+
+      // Only try to reconnect if not already trying and not in mounting phase
+      if (
+        !isMountingRef.current &&
+        wsRef.current?.readyState !== WebSocket.CONNECTING
+      ) {
+        setupWebSocket();
+      }
+    }
+  }, [torqueEnabled, updateConnectionStatus, setupWebSocket]);
 
   // Handle joint changes from UI controls
   const handleJointChange = useCallback(
     (jointName: string, value: number) => {
       // Don't send updates back to server if we're currently updating from server data
       if (updatingFromServer.current) {
-        console.log(
-          `Skipping update for ${jointName} as we're updating from server`
-        );
         return;
       }
-
-      console.log(`Joint change: ${jointName} -> ${value} radians`);
 
       if (robotRef.current && robotRef.current.setJointValue) {
         // Update 3D model
@@ -557,27 +460,12 @@ function App() {
           // Convert from radians to degrees for API
           const degrees = (value * 180) / Math.PI;
 
-          console.log(
-            `Sending command: Servo ID ${servoId} -> ${degrees}° (from joint ${jointName})`
-          );
-
           // Send to server via WebSocket if connected
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            console.log(
-              `WebSocket is open, sending command via updateServoPosition`
-            );
-            updateServoPosition(servoId, degrees)
-              .then((response) => {
-                console.log(`Command sent successfully:`, response);
-              })
-              .catch((error) => {
-                console.error("Failed to update servo position:", error);
-                updateConnectionStatus("disconnected");
-              });
+            updateServoPosition(servoId, degrees).catch(() => {
+              updateConnectionStatus("disconnected");
+            });
           } else {
-            console.warn(
-              `WebSocket not open (state: ${wsRef.current?.readyState}), cannot send command`
-            );
             updateConnectionStatus("disconnected");
 
             // Only try to reconnect if not already trying and not in mounting phase
@@ -588,10 +476,6 @@ function App() {
               setupWebSocket();
             }
           }
-        } else {
-          console.warn(`No servo mapping found for joint: ${jointName}`);
-          // Log all available mappings to help debug
-          console.log("Available mappings:", JOINT_TO_SERVO_ID);
         }
       }
     },
@@ -600,13 +484,18 @@ function App() {
 
   // Handle drag start/end to prevent WebSocket updates during slider interaction
   const handleDragStart = useCallback(() => {
-    console.log("Drag started, disabling position sync from server");
     isDraggingRef.current = true;
   }, []);
 
+  // Add a delay after drag ends before accepting server updates
   const handleDragEnd = useCallback(() => {
-    console.log("Drag ended, enabling position sync from server");
-    isDraggingRef.current = false;
+    isDraggingRef.current = true; // Keep blocking updates
+
+    // Add a short delay before accepting server updates again
+    // This gives time for our command to be processed by the server
+    setTimeout(() => {
+      isDraggingRef.current = false;
+    }, 1000); // 1 second delay to let our changes stabilize
   }, []);
 
   // Handle center all button click
@@ -615,8 +504,6 @@ function App() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       centerAllServos()
         .then(() => {
-          console.log("Centered all servos");
-
           // Update our UI to match (0 for all joints)
           if (robotRef.current) {
             const newAngles = { ...jointAngles };
@@ -638,8 +525,7 @@ function App() {
             }
           }
         })
-        .catch((error) => {
-          console.error("Failed to center servos:", error);
+        .catch(() => {
           updateConnectionStatus("disconnected");
         });
     } else {
@@ -657,123 +543,48 @@ function App() {
 
   // Handle calibrate button click
   const handleCalibrateClick = useCallback(() => {
-    console.log(
-      "Calibrate button clicked, WebSocket state:",
-      wsRef.current?.readyState
-    );
-
     // Only proceed if WebSocket is open
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      console.log("WebSocket is open, sending startCalibration request");
-
       // Initialize calibration state immediately for better user feedback
       setCalibrationMode(true);
       setIsCalibrating(true);
 
-      // If we have servo IDs from joint mapping, pre-initialize calibration
-      const servoIds = Object.values(JOINT_TO_SERVO_ID);
-      console.log("JOINT_TO_SERVO_ID mapping:", JOINT_TO_SERVO_ID);
-      console.log("Pre-initializing calibration with servo IDs:", servoIds);
-
-      // Force set allServoIds immediately to a new array
-      const servoIdsArray = servoIds as number[];
-      setAllServoIds(servoIdsArray);
-
-      // Store a local reference for immediate use
-      window.setTimeout(() => {
-        console.log("Checking if allServoIds was set correctly:", allServoIds);
-      }, 0);
-
       // Start with the first step
-      const firstServoId = servoIds[0];
-      const firstAngle = calibrationAngles[0];
-      const totalSteps = servoIds.length * calibrationAngles.length;
+      const servoIds = Object.values(JOINT_TO_SERVO_ID);
+      const angles = [0, 90, -90]; // Zero, max, min
 
-      console.log(`Setting up first calibration step:`);
-      console.log(
-        `- Joint: ${getJointDisplayName(firstServoId)} (ID: ${firstServoId})`
-      );
-      console.log(`- Angle: ${firstAngle}°`);
-      console.log(`- Total steps: ${totalSteps}`);
+      if (servoIds.length > 0) {
+        const firstServoId = servoIds[0];
+        const firstAngle = angles[0];
+        const totalSteps = servoIds.length * angles.length;
 
-      // Set up the first calibration step in UI immediately
-      setCurrentCalibrationStep({
-        joint: String(firstServoId),
-        angle: firstAngle,
-        current_step: 1,
-        total_steps: totalSteps,
-      });
-
-      // Reset all joints to zero in the 3D model
-      if (robotRef.current) {
-        console.log("Resetting all joints to zero for calibration start");
-        Object.keys(robotRef.current.joints).forEach((jointName) => {
-          robotRef.current.setJointValue(jointName, 0);
+        // Set up the first calibration step in UI immediately
+        setCurrentCalibrationStep({
+          joint: String(firstServoId),
+          angle: firstAngle,
+          current_step: 1,
+          total_steps: totalSteps,
         });
 
-        // Update the active joint
-        const jointName = getJointNameById(firstServoId);
-        if (jointName) {
-          console.log(`Setting active joint ${jointName} to ${firstAngle}°`);
-          const radians = (firstAngle * Math.PI) / 180;
-          robotRef.current.setJointValue(jointName, radians);
-
-          // Update jointAngles state
-          setJointAngles((prev) => {
-            const newAngles = { ...prev };
-            Object.keys(robotRef.current.joints).forEach((robotJointName) => {
-              if (jointName && robotJointName === jointName) {
-                newAngles[robotJointName] = (firstAngle * Math.PI) / 180;
-              } else {
-                newAngles[robotJointName] = 0;
-              }
-            });
-            return newAngles;
-          });
-        }
-      }
-
-      // Send the calibration request to the server
-      startCalibration()
-        .then(() => {
-          console.log("startCalibration request was successful");
-
-          // Don't wait for server response to start first calibration step
-          if (servoIds.length > 0) {
-            const firstServoId = servoIds[0];
-            const firstAngle = calibrationAngles[0];
-            const totalSteps = servoIds.length * calibrationAngles.length;
-
+        // Send the calibration request to the server
+        startCalibration()
+          .then(() => {
             // Send the first step to the server
-            console.log("Sending first calibration step to server");
-            setCalibrationStep(firstServoId, firstAngle, 1, totalSteps)
-              .then(() => {
-                console.log(
-                  "First calibration step sent successfully to server"
-                );
-              })
-              .catch((error) => {
-                console.error("Failed to set first calibration step:", error);
-                alert(
-                  "Failed to set calibration step. Check console for details."
-                );
-              });
-          }
-        })
-        .catch((error) => {
-          console.error("Failed to start calibration:", error);
-          alert("Failed to start calibration. Check console for details.");
-          updateConnectionStatus("disconnected");
+            setCalibrationStep(firstServoId, firstAngle, 1, totalSteps);
+          })
+          .catch(() => {
+            // Reset calibration state on error
+            setCalibrationMode(false);
+            setIsCalibrating(false);
+            setCurrentCalibrationStep(null);
 
-          // Reset calibration state on error
-          setCalibrationMode(false);
-          setIsCalibrating(false);
-          setCurrentCalibrationStep(null);
-        });
+            updateConnectionStatus("disconnected");
+            alert("Failed to start calibration.");
+          });
+      }
     } else {
-      console.error("WebSocket not open, can't start calibration");
-      alert("WebSocket connection is not open. Please check your connection.");
       updateConnectionStatus("disconnected");
+      alert("WebSocket connection is not open.");
 
       // Only try to reconnect if not already trying and not in mounting phase
       if (
@@ -785,135 +596,33 @@ function App() {
     }
   }, [updateConnectionStatus]);
 
-  // Handle capture position button click
-  const handleCapturePosition = useCallback(() => {
-    if (
-      wsRef.current?.readyState === WebSocket.OPEN &&
-      currentCalibrationStep
-    ) {
-      // Log the current calibration step to debug
-      console.log(
-        "Current calibration step:",
-        JSON.stringify(currentCalibrationStep)
-      );
+  // Handle cancel calibration
+  const handleCancelCalibration = useCallback(() => {
+    // Reset calibration state
+    setIsCalibrating(false);
+    setCurrentCalibrationStep(null);
+    setCalibrationMode(false);
 
-      const { joint, angle, current_step } = currentCalibrationStep;
-      const stepNumber = current_step || 1;
-
-      // The joint in this case is already the servo ID as a string
-      const servoId = Number(joint);
-      const displayName = getJointDisplayName(servoId);
-
-      console.log(
-        `Capturing position for step ${stepNumber}: ${displayName} (servo ID ${servoId}) at ${angle}°`
-      );
-
-      // Show success immediately for better user experience
-      setCaptureSuccess(true);
-      setTimeout(() => setCaptureSuccess(false), 1500);
-
-      // Send the capture request
-      captureCalibrationPosition(servoId.toString(), angle, stepNumber)
-        .then((result) => {
-          console.log(`Position captured successfully: ${result.position}`);
-
-          // DIRECT IMPLEMENTATION: Move to next step immediately
-          const allServos = Object.values(JOINT_TO_SERVO_ID) as number[];
-          const allAngles = [0, 90, -90]; // Zero, max, min
-
-          // Find current position in sequence
-          const currentServoIndex = allServos.findIndex((id) => id === servoId);
-          const currentAngleIndex = allAngles.findIndex((a) => a === angle);
-
-          console.log("Current position in sequence:", {
-            currentServoIndex,
-            currentAngleIndex,
-            allServos,
-            allAngles,
-          });
-
-          if (currentServoIndex >= 0 && currentAngleIndex >= 0) {
-            // Calculate next position
-            let nextAngleIndex = (currentAngleIndex + 1) % allAngles.length;
-            let nextServoIndex = currentServoIndex;
-
-            // If we've gone through all angles for this joint, move to the next joint
-            if (nextAngleIndex === 0) {
-              nextServoIndex = (currentServoIndex + 1) % allServos.length;
-            }
-
-            console.log("Next position calculated:", {
-              nextServoIndex,
-              nextAngleIndex,
-            });
-
-            // Check if we've completed the full cycle
-            if (
-              nextServoIndex === 0 &&
-              nextAngleIndex === 0 &&
-              (currentServoIndex > 0 || currentAngleIndex > 0)
-            ) {
-              // We've completed the full cycle
-              console.log("Calibration complete, sending end_calibration");
-              endCalibration()
-                .then(() => {
-                  setIsCalibrating(false);
-                  setCurrentCalibrationStep(null);
-                  setCalibrationMode(false);
-                })
-                .catch((error) =>
-                  console.error("Failed to end calibration:", error)
-                );
-            } else {
-              // Move to the next step
-              const nextServoId = allServos[nextServoIndex];
-              const nextAngle = allAngles[nextAngleIndex];
-              const totalSteps = allServos.length * allAngles.length;
-              const nextStep =
-                nextServoIndex * allAngles.length + nextAngleIndex + 1;
-
-              console.log(
-                `NEXT STEP (client): Servo ${nextServoId} at ${nextAngle}° (Step ${nextStep}/${totalSteps})`
-              );
-
-              // Update UI state
-              setCurrentCalibrationStep({
-                joint: String(nextServoId),
-                angle: nextAngle,
-                current_step: nextStep,
-                total_steps: totalSteps,
-              });
-
-              // Send to server
-              setCalibrationStep(nextServoId, nextAngle, nextStep, totalSteps)
-                .then(() => {
-                  console.log(
-                    `Successfully set next calibration step: Servo ${nextServoId} at ${nextAngle}°`
-                  );
-                })
-                .catch((error) => {
-                  console.error("Failed to set next calibration step:", error);
-                  alert(
-                    "Failed to move to next calibration step. Check console for details."
-                  );
-                });
-            }
-          } else {
-            console.error("Invalid current position:", {
-              servoId,
-              angle,
-              currentServoIndex,
-              currentAngleIndex,
-            });
-          }
+    // Send cancel command to server if connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      // Use existing WebSocket to send a cancel message with proper requestId
+      const requestId = `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      wsRef.current.send(
+        JSON.stringify({
+          type: "cancel_calibration",
+          requestId: requestId,
         })
-        .catch((error) => {
-          console.error("Failed to capture position:", error);
-          setCaptureSuccess(false);
-          alert("Failed to capture position. Check console for details.");
-        });
+      );
+
+      console.log("Sent cancel_calibration request to server");
     }
-  }, [currentCalibrationStep, getJointDisplayName]);
+  }, []);
+
+  const handleCalibrationComplete = useCallback(() => {
+    setIsCalibrating(false);
+    setCurrentCalibrationStep(null);
+    setCalibrationMode(false);
+  }, []);
 
   // Manually reconnect WebSocket if we've been disconnected for too long
   useEffect(() => {
@@ -923,7 +632,6 @@ function App() {
       // Schedule periodic reconnection attempts if disconnected
       reconnectInterval = window.setInterval(() => {
         if (serverStatus === "disconnected" && !isMountingRef.current) {
-          console.log("Attempting scheduled reconnection...");
           setupWebSocket();
         }
       }, 5000); // Try every 5 seconds
@@ -935,63 +643,6 @@ function App() {
       }
     };
   }, [serverStatus, setupWebSocket]);
-
-  // Add a more detailed log at the start of the effect
-  useEffect(() => {
-    // Update 3D model when calibration step changes
-    if (isCalibrating && currentCalibrationStep && robotRef.current) {
-      const { joint, angle } = currentCalibrationStep;
-      const servoId = Number(joint);
-      const jointName = getJointNameById(servoId);
-
-      console.log(
-        `CALIBRATION MODEL UPDATE: Updating 3D model for calibration step:`
-      );
-      console.log(`- Joint: ${jointName} (servo ID ${servoId})`);
-      console.log(`- Target Angle: ${angle}°`);
-      console.log(
-        `- Step: ${currentCalibrationStep.current_step}/${currentCalibrationStep.total_steps}`
-      );
-
-      if (!jointName) {
-        console.error(`Could not find joint name for servo ID ${servoId}!`);
-        console.log(`Available mappings:`, JOINT_TO_SERVO_ID);
-        return;
-      }
-
-      // Reset all joints to zero
-      Object.keys(robotRef.current.joints).forEach((robotJointName) => {
-        // Set all joints to zero except the active calibration joint
-        if (jointName && robotJointName === jointName) {
-          // Set the active joint to the calibration angle
-          const radians = (angle * Math.PI) / 180;
-          console.log(
-            `Setting active joint ${robotJointName} to ${angle}° (${radians.toFixed(
-              4
-            )} radians)`
-          );
-          robotRef.current.setJointValue(robotJointName, radians);
-        } else {
-          console.log(`Setting inactive joint ${robotJointName} to 0`);
-          robotRef.current.setJointValue(robotJointName, 0);
-        }
-      });
-
-      // Update jointAngles state to match
-      setJointAngles((prev) => {
-        const newAngles = { ...prev };
-        Object.keys(robotRef.current.joints).forEach((robotJointName) => {
-          if (jointName && robotJointName === jointName) {
-            newAngles[robotJointName] = (angle * Math.PI) / 180;
-          } else {
-            newAngles[robotJointName] = 0;
-          }
-        });
-        console.log("Updated jointAngles state for calibration:", newAngles);
-        return newAngles;
-      });
-    }
-  }, [currentCalibrationStep, isCalibrating]);
 
   return (
     <div className="w-full h-screen m-0 p-0 overflow-hidden relative">
@@ -1023,155 +674,81 @@ function App() {
             </span>
           </div>
           <div className="flex space-x-2">
-            <button
-              onClick={handleCenterAll}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-xs transition-colors"
-              disabled={calibrationMode}
-            >
-              Center All
-            </button>
-            <button
-              onClick={handleCalibrateClick}
-              className="bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded text-xs transition-colors"
-              disabled={calibrationMode}
-            >
-              Calibrate
-            </button>
+            {!calibrationMode && (
+              <>
+                <div className="flex items-center">
+                  <label className="relative inline-flex items-center cursor-pointer mr-2">
+                    <input
+                      type="checkbox"
+                      checked={torqueEnabled}
+                      onChange={handleTorqueToggle}
+                      className="sr-only peer"
+                    />
+                    <div
+                      className={`w-9 h-5 rounded-full peer peer-focus:ring-2 peer-focus:ring-offset-1 
+                      ${
+                        torqueEnabled
+                          ? "bg-green-500 peer-focus:ring-green-400"
+                          : "bg-red-500 peer-focus:ring-red-400"
+                      } 
+                      after:content-[''] after:absolute after:top-0.5 after:left-[2px] 
+                      after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 
+                      after:transition-all ${
+                        torqueEnabled ? "after:translate-x-full" : ""
+                      }`}
+                    ></div>
+                  </label>
+                  <span className="text-xs font-medium text-gray-700">
+                    Torque: {torqueEnabled ? "ON" : "OFF"}
+                  </span>
+                </div>
+                <button
+                  onClick={handleCenterAll}
+                  className="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-xs transition-colors"
+                >
+                  Center All
+                </button>
+              </>
+            )}
+            {!calibrationMode ? (
+              <button
+                onClick={handleCalibrateClick}
+                className="bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded text-xs transition-colors"
+              >
+                Calibrate
+              </button>
+            ) : (
+              <button
+                onClick={handleCancelCalibration}
+                className="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-xs transition-colors"
+              >
+                Cancel Calibration
+              </button>
+            )}
           </div>
         </div>
 
         {/* Calibration UI */}
-        {isCalibrating && currentCalibrationStep && (
-          <div className="bg-white/95 backdrop-blur-md rounded-lg p-4 mb-2 border-2 border-orange-500">
-            <h3 className="text-lg font-bold mb-3 text-orange-600">
-              Calibration Mode
-            </h3>
-            <div className="mb-4">
-              <div className="flex justify-between text-sm text-gray-600 mb-1">
-                <span>
-                  Step {currentCalibrationStep.current_step} of{" "}
-                  {currentCalibrationStep.total_steps}
-                </span>
-                <span>
-                  {Math.round(
-                    ((currentCalibrationStep.current_step || 0) /
-                      (currentCalibrationStep.total_steps || 1)) *
-                      100
-                  )}
-                  %
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div
-                  className="bg-orange-500 h-2 rounded-full"
-                  style={{
-                    width: `${Math.round(
-                      ((currentCalibrationStep.current_step || 0) /
-                        (currentCalibrationStep.total_steps || 1)) *
-                        100
-                    )}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
+        <CalibrationUI
+          isCalibrating={isCalibrating}
+          currentStep={currentCalibrationStep}
+          jointToServoId={JOINT_TO_SERVO_ID}
+          robot3DRef={robotRef}
+          onCalibrationComplete={handleCalibrationComplete}
+        />
 
-            <div className="bg-orange-50 rounded-lg p-4 mb-4 border border-orange-200">
-              <h4 className="text-base font-bold mb-2 text-gray-800">
-                Current Task:
-              </h4>
-
-              <div className="flex items-center justify-center mb-3">
-                <div className="bg-orange-100 rounded-full px-4 py-2 font-bold text-orange-800">
-                  {getJointDisplayName(Number(currentCalibrationStep.joint))}
-                </div>
-                <div className="mx-2 text-gray-400">→</div>
-                <div className="bg-blue-100 rounded-full px-4 py-2 font-bold text-blue-800">
-                  {currentCalibrationStep.angle}°
-                </div>
-              </div>
-
-              <div className="text-sm text-gray-700 bg-white p-3 rounded border border-gray-200">
-                <ol className="list-decimal pl-5 space-y-2">
-                  <li>
-                    Manually position the{" "}
-                    <strong className="text-orange-600">
-                      {getJointDisplayName(
-                        Number(currentCalibrationStep.joint)
-                      )}
-                    </strong>{" "}
-                    joint to{" "}
-                    <strong className="text-blue-600">
-                      {currentCalibrationStep.angle}°
-                    </strong>
-                  </li>
-                  <li>Check the 3D model to see the correct position</li>
-                  <li>
-                    Click "Capture Position" when the joint is properly
-                    positioned
-                  </li>
-                </ol>
-              </div>
-            </div>
-
-            <button
-              onClick={handleCapturePosition}
-              className={`w-full ${
-                captureSuccess
-                  ? "bg-green-600 hover:bg-green-700"
-                  : "bg-green-500 hover:bg-green-600"
-              } text-white py-3 rounded-lg font-medium text-base transition-colors relative`}
-              disabled={captureSuccess}
-            >
-              {captureSuccess ? (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                      clipRule="evenodd"
-                    ></path>
-                  </svg>
-                  Position Captured!
-                </span>
-              ) : (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M5 13l4 4L19 7"
-                    />
-                  </svg>
-                  Capture Position
-                </span>
-              )}
-            </button>
-          </div>
-        )}
-
-        {/* Robot controls */}
-        {robot ? (
+        {/* Robot controls - only show when not calibrating */}
+        {robot && !isCalibrating ? (
           <RobotControls
             robot={robot}
             onJointChange={handleJointChange}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             jointValues={jointAngles}
-            isCalibrating={isCalibrating}
+            isCalibrating={false}
+            torqueEnabled={torqueEnabled}
           />
-        ) : (
+        ) : robot && isCalibrating ? null : (
           <div className="bg-white/90 rounded-lg p-4 text-gray-800 font-medium">
             Loading robot controls...
           </div>
