@@ -19,4 +19,4 @@ requires = ["setuptools>=42.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["servo_controller", "scripts", "ui", "core"]
+packages = ["servo_controller", "scripts", "ui", "core", "api"]

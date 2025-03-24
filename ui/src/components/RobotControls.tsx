@@ -274,7 +274,9 @@ const RobotControls = ({
       </h2>
 
       {isCalibrating ? (
-        <div className="text-center p-4">Calibration in progress...</div>
+        <div className="text-center p-4 text-orange-600 font-medium">
+          Calibration in progress. Sliders disabled.
+        </div>
       ) : (
         <ul className="flex flex-col space-y-1">
           {joints

@@ -13,12 +13,6 @@ let pendingRequests: Map<string, { resolve: Function; reject: Function }> =
 let requestIdCounter = 0;
 
 export interface ServoPositions {
-  base_yaw: number;
-  pitch: number;
-  pitch2: number;
-  pitch3: number;
-  roll: number;
-  grip: number;
   [key: string]: number; // Index signature for dynamic access
 }
 
@@ -58,29 +52,61 @@ const getWebSocket = (): Promise<WebSocket> => {
 
     websocket.onmessage = (event) => {
       try {
+        console.log(`WebSocket message received: ${event.data}`);
         const data = JSON.parse(event.data);
 
-        // Handle different message types
+        // First check if it's a response to a pending request regardless of type
+        if (data.requestId && pendingRequests.has(data.requestId)) {
+          console.log(
+            `Found matching request for ${data.requestId}, type: ${data.type}`
+          );
+          const pendingRequest = pendingRequests.get(data.requestId);
+
+          if (data.type === "error") {
+            // Handle error response
+            console.error(
+              `Received error for request ${data.requestId}:`,
+              data.message
+            );
+            if (pendingRequest) {
+              pendingRequest.reject(new Error(data.message));
+              pendingRequests.delete(data.requestId);
+            }
+          } else {
+            // Handle successful response (any type)
+            console.log(
+              `Resolving request ${data.requestId} with response type: ${data.type}`
+            );
+            if (pendingRequest) {
+              pendingRequest.resolve(data);
+              pendingRequests.delete(data.requestId);
+            }
+          }
+
+          // Continue processing for broadcast handlers below
+        }
+
+        // Now handle different message types for broadcast purposes
         if (data.type === "servo_positions") {
           // Handle regular position updates
+          console.log(`Received servo positions broadcast`, data.positions);
           // These are broadcast and don't need request ID matching
-        } else if (data.type === "ack" && data.requestId) {
-          // Handle acknowledgment for a specific request
-          const pendingRequest = pendingRequests.get(data.requestId);
-          if (pendingRequest) {
-            pendingRequest.resolve(data);
-            pendingRequests.delete(data.requestId);
-          }
-        } else if (data.type === "error" && data.requestId) {
-          // Handle errors for a specific request
-          const pendingRequest = pendingRequests.get(data.requestId);
-          if (pendingRequest) {
-            pendingRequest.reject(new Error(data.message));
-            pendingRequests.delete(data.requestId);
-          }
+        } else if (
+          data.type === "calibration_step" ||
+          data.type === "calibration_complete" ||
+          data.type === "position_captured"
+        ) {
+          // Log calibration-related messages in more detail
+          console.log(`Received calibration message type=${data.type}:`, data);
+          // These messages are passed up to the application
+        } else if (data.type === "error" && !data.requestId) {
+          // Handle broadcast errors (not tied to a request)
+          console.error(`Received broadcast error:`, data.message);
+        } else {
+          console.log(`Received other WebSocket message:`, data);
         }
       } catch (error) {
-        console.error("Error processing WebSocket message:", error);
+        console.error("Error processing WebSocket message:", error, event.data);
       }
     };
   });
@@ -96,20 +122,44 @@ const sendWebSocketRequest = async (request: any): Promise<any> => {
   const requestId = `req_${Date.now()}_${requestIdCounter++}`;
   request.requestId = requestId;
 
+  console.log(`Preparing to send WebSocket request:`, request);
+
   return new Promise((resolve, reject) => {
     // Store the promise callbacks with the request ID
     pendingRequests.set(requestId, { resolve, reject });
 
     // Set a timeout to clean up abandoned requests
+    // Use longer timeout for calibration-related requests
+    const isCalibrationRequest =
+      request.type && request.type.includes("calibration");
+    const timeoutMs = isCalibrationRequest ? 30000 : 10000; // 30 seconds for calibration, 10 seconds for others
+
     setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         pendingRequests.delete(requestId);
-        reject(new Error("WebSocket request timed out"));
+        console.error(
+          `WebSocket request timed out after ${
+            timeoutMs / 1000
+          }s: ${requestId}`,
+          request
+        );
+        reject(
+          new Error(
+            `WebSocket request timed out after ${timeoutMs / 1000} seconds`
+          )
+        );
       }
-    }, 5000); // 5 second timeout
+    }, timeoutMs);
 
     // Send the request
-    ws.send(JSON.stringify(request));
+    try {
+      const message = JSON.stringify(request);
+      console.log(`Sending WebSocket message: ${message}`);
+      ws.send(message);
+    } catch (error) {
+      console.error(`Error sending WebSocket message:`, error, request);
+      reject(error);
+    }
   });
 };
 
@@ -133,21 +183,29 @@ export const getServoPositions = async (): Promise<ServoPositions> => {
 
 /**
  * Update a single servo position
- * @param servoId - The servo identifier (base_yaw, pitch, pitch2, etc.)
+ * @param servoId - The servo identifier (numeric ID)
  * @param position - Position in degrees (-90 to 90)
  * @returns Promise with the updated servo info
  */
 export const updateServoPosition = async (
-  servoId: string,
+  servoId: number,
   position: number
-): Promise<{ success: boolean; servo_id: string; position: number }> => {
+): Promise<{ success: boolean; servo_id: number; position: number }> => {
+  console.log(
+    `updateServoPosition called with servoId=${servoId}, position=${position}`
+  );
+
   try {
     // Send update via WebSocket
-    const response = await sendWebSocketRequest({
+    const request = {
       type: "servo_update",
       servo_id: servoId,
       position: position,
-    });
+    };
+
+    console.log(`Sending servo update request:`, request);
+    const response = await sendWebSocketRequest(request);
+    console.log(`Received servo update response:`, response);
 
     return {
       success: true,
@@ -174,6 +232,116 @@ export const centerAllServos = async (): Promise<{ success: boolean }> => {
     return { success: true };
   } catch (error) {
     console.error("Failed to center servos:", error);
+    throw error;
+  }
+};
+
+/**
+ * Start calibration process
+ * This initiates the calibration sequence by releasing torque on all servos
+ * @returns Promise indicating success
+ */
+export const startCalibration = async (): Promise<{ success: boolean }> => {
+  try {
+    console.log("Sending start_calibration request via WebSocket");
+    // Send start calibration command via WebSocket
+    await sendWebSocketRequest({
+      type: "start_calibration",
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to start calibration:", error);
+    throw error;
+  }
+};
+
+/**
+ * Set current calibration step
+ * This sets the UI to the specified calibration step
+ * @param servoId - The servo ID to calibrate
+ * @param angle - The target angle (0, 90, or -90)
+ * @param stepNumber - The current step number
+ * @param totalSteps - The total number of steps
+ * @returns Promise with acknowledgment
+ */
+export const setCalibrationStep = async (
+  servoId: string | number,
+  angle: number,
+  stepNumber: number,
+  totalSteps: number
+): Promise<{ success: boolean }> => {
+  try {
+    console.log(
+      `Setting calibration step for servo ${servoId} at ${angle}° (step ${stepNumber}/${totalSteps})`
+    );
+    // Send calibration step command via WebSocket
+    await sendWebSocketRequest({
+      type: "set_calibration_step",
+      joint: servoId.toString(),
+      angle: angle,
+      step_number: stepNumber,
+      total_steps: totalSteps,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error(`Failed to set calibration step for ${servoId}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Capture calibration position
+ * This captures the current position for a specific servo at a specific angle
+ * @param servoId - The servo ID (numeric ID as a string or number)
+ * @param angle - The target angle (0, 90, or -90)
+ * @param stepNumber - The current step number in the calibration sequence
+ * @returns Promise with the captured position details
+ */
+export const captureCalibrationPosition = async (
+  servoId: string | number,
+  angle: number,
+  stepNumber: number
+): Promise<{ success: boolean; position: number }> => {
+  try {
+    console.log(
+      `Sending capture_position request for servo ${servoId} at ${angle}° (step ${stepNumber})`
+    );
+    // Send capture position command via WebSocket
+    const response = await sendWebSocketRequest({
+      type: "capture_position",
+      joint: servoId.toString(),
+      angle: angle,
+      step_number: stepNumber,
+    });
+
+    return {
+      success: true,
+      position: response.position || 0,
+    };
+  } catch (error) {
+    console.error(`Failed to capture position for ${servoId}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * End calibration process
+ * This completes the calibration sequence and enables torque on all servos
+ * @returns Promise indicating success
+ */
+export const endCalibration = async (): Promise<{ success: boolean }> => {
+  try {
+    console.log("Sending end_calibration request via WebSocket");
+    // Send end calibration command via WebSocket
+    await sendWebSocketRequest({
+      type: "end_calibration",
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to end calibration:", error);
     throw error;
   }
 };

@@ -31,14 +31,20 @@ class Servos:
                  servo_ids=None, 
                  p_coef=8, i_coef=0, d_coef=16, 
                  max_accel=254, accel=254):
-        # Load config and calibration
+        # Config and calibration file paths
         self.config_file = os.path.join(os.path.dirname(__file__), CONFIG_FILENAME)
         self.calibration_file = os.path.join(os.path.dirname(__file__), CALIBRATION_FILENAME)
+        
+        # Load configuration and calibration data
         self.config = self._load_config()
         self.calibration = self._load_calibration()
-
+        
+        # State tracking variables
         self.is_calibrated = bool(self.calibration)
-        self.draft_calibration = self.calibration.copy() if self.is_calibrated else {}
+        self.connected = False
+        self.torque_enabled = False
+        self.calibration_mode = False
+        self.temp_calibration_data = {}
         
         # Use provided parameters or config values
         self.port = port or self.config.get('port')
@@ -51,25 +57,21 @@ class Servos:
         self.max_accel = max_accel
         self.accel = accel
         
-        # State tracking
-        self._torque_enabled = False
-        self._calibration_in_progress = False
-        self._is_connected = False
+        # Internal tracking
         self._readers = {}
         self._writers = {}
         
+        # Validate essential configuration
         if not self.port:
             raise ValueError("No port specified and no port found in config")
         
         if not self.servo_ids:
             raise ValueError("No servo IDs specified and no servo IDs found in config")
         
-        # Automatically connect and configure servos
-        self.connect()
-        self._configure_servos()
+        # Note: We don't automatically connect or configure servos
  
     def connect(self):
-        if self._is_connected:
+        if self.connected:
             return
             
         self.port_handler = scs.PortHandler(self.port)
@@ -81,8 +83,10 @@ class Servos:
             
             self.port_handler.setBaudRate(BAUDRATE)
             self.port_handler.setPacketTimeoutMillis(TIMEOUT_MS)
-            self._is_connected = True
+            self.connected = True
             print(f"Connected on {self.port}")
+            self._configure_servos()
+            self.enable_torque()
         
         except Exception as e:
             if hasattr(self, 'port_handler') and self.port_handler:
@@ -90,13 +94,12 @@ class Servos:
             raise e
 
     def disconnect(self):
-        if not self._is_connected:
+        if not self.connected:
             return
         
         # Disable torque when disconnecting
-        if self._torque_enabled:
-            self._write("Torque_Enable", 0)
-            self._torque_enabled = False
+        if self.torque_enabled:
+            self.disable_torque()
             
         time.sleep(0.1)
             
@@ -105,47 +108,33 @@ class Servos:
             
         self._readers = {}
         self._writers = {}
-        self._is_connected = False
+        self.connected = False
         print("Disconnected")
-
-    def _configure_servos(self):
-        if not self._is_connected:
-            self.connect()
-            
-        # Configure but don't automatically enable torque
-        for servo_id in self.servo_ids:
-            self._write("Mode", 0, servo_id)
-            self._write("P_Coefficient", self.p_coef, servo_id)
-            self._write("I_Coefficient", self.i_coef, servo_id)
-            self._write("D_Coefficient", self.d_coef, servo_id)            
-            self._write("Lock", 0, servo_id)
-            self._write("Maximum_Acceleration", self.max_accel, servo_id)
-            self._write("Acceleration", self.accel, servo_id)
 
     # Core servo control functions
     def enable_torque(self):
-        if not self._is_connected:
-            self.connect()
+        assert self.connected, "Not connected to servos. Call connect() first."
             
         self._write("Torque_Enable", 1)
-        self._torque_enabled = True
+        self.torque_enabled = True
         print("Torque enabled")
         
     def disable_torque(self):
-        if not self._is_connected:
-            self.connect()
+        assert self.connected, "Not connected to servos. Call connect() first."
             
         self._write("Torque_Enable", 0)
-        self._torque_enabled = False
+        self.torque_enabled = False
         print("Torque disabled")
         
     def get_positions(self):
+        assert self.connected, "Not connected to servos. Call connect() first."
+        
         positions = self._read("Present_Position", self.servo_ids)
         return {servo_id: int(pos) for servo_id, pos in zip(self.servo_ids, positions)}
     
     def set_position(self, positions):
-        if not self._torque_enabled:
-            raise RuntimeError("Cannot set position: Torque not enabled. Call enable_torque() first.")
+        assert self.connected, "Not connected to servos. Call connect() first."
+        assert self.torque_enabled, "Torque not enabled. Call enable_torque() first."
             
         pos_values = []
         servo_ids = []
@@ -162,43 +151,83 @@ class Servos:
             
     def get_servos(self):
         return self.servo_ids
-
-    def status(self):
-        if "calibration" in self.config:
-            print(f"Calibration: {self.config['calibration']}")
-        else:
-            print("No calibration found")
-
-        try:
-            positions = self.get_positions() 
-            return {servo_id: servo_id in positions for servo_id in self.servo_ids}
-        except Exception:
-            return {servo_id: False for servo_id in self.servo_ids}
+    
+    # Calibration-dependent methods
+    def get_angles(self):
+        assert self.connected, "Not connected to servos. Call connect() first."
+        assert self.is_calibrated, "Servos not calibrated. Run calibration procedure first."
+        
+        positions = self.get_positions()
+        return {servo_id: self._position_to_angle(servo_id, pos) 
+                for servo_id, pos in positions.items()}
+    
+    def set_angle(self, angles):
+        assert self.connected, "Not connected to servos. Call connect() first."
+        assert self.torque_enabled, "Torque not enabled. Call enable_torque() first."
+        assert self.is_calibrated, "Servos not calibrated. Run calibration procedure first."
+        
+        positions = {}
+        for servo_id, angle in angles.items():
+            if servo_id not in self.servo_ids:
+                raise ValueError(f"Unknown servo ID: {servo_id}")
+            positions[servo_id] = self._angle_to_position(servo_id, angle)
+            
+        if positions:
+            self.set_position(positions)
 
     # Calibration functions
     def start_calibration(self):
-        if self._calibration_in_progress:
+        assert self.connected, "Not connected to servos. Call connect() first."
+        
+        if self.calibration_mode:
             print("Calibration already in progress")
             return
             
-        self.draft_calibration = {}
-        self._calibration_in_progress = True
+        # Initialize temporary calibration data
+        self.temp_calibration_data = {}
+        self.calibration_mode = True
         
-        self.disable_torque()
+        # Always disable torque during calibration
+        if self.torque_enabled:
+            self.disable_torque()
+            
         print("Calibration started. Torque disabled.")
         
     def end_calibration(self):
-        if not self._calibration_in_progress:
-            print("No calibration in progress")
+        assert self.calibration_mode, "No calibration in progress. Call start_calibration() first."
+            
+        if not self.temp_calibration_data:
+            print("No calibration points set, nothing to save")
+            self.calibration_mode = False
             return
             
-        if not self.draft_calibration:
-            print("No calibration points set, nothing to save")
-            self._calibration_in_progress = False
+        # Check if all servos have all required calibration points
+        required_points = ['zero', 'min', 'max']
+        missing_points = {}
+        
+        for servo_id in self.servo_ids:
+            servo_id_str = str(servo_id)
+            if servo_id_str not in self.temp_calibration_data:
+                missing_points[servo_id_str] = required_points
+                continue
+                
+            servo_missing = []
+            for point in required_points:
+                if point not in self.temp_calibration_data[servo_id_str]:
+                    servo_missing.append(point)
+            
+            if servo_missing:
+                missing_points[servo_id_str] = servo_missing
+        
+        if missing_points:
+            print("Incomplete calibration, cannot save:")
+            for servo_id, points in missing_points.items():
+                print(f"  Servo {servo_id} missing: {', '.join(points)}")
+            self.calibration_mode = False
             return
             
         # Save calibration
-        self.calibration = self.draft_calibration.copy()
+        self.calibration = self.temp_calibration_data.copy()
         self.is_calibrated = True
         
         # Create directory if needed
@@ -209,28 +238,29 @@ class Servos:
             json.dump(self.calibration, f, indent=2)
             
         print(f"Calibration saved")
-        self._calibration_in_progress = False
+        self.calibration_mode = False
+        self.temp_calibration_data = {}
 
         # Reload calibration
-        self._load_calibration()
+        self.calibration = self._load_calibration()
         self.is_calibrated = bool(self.calibration)
-        self.draft_calibration = self.calibration.copy() if self.is_calibrated else {}
 
-
+        self.enable_torque()
+        
         
     def cancel_calibration(self):
-        if not self._calibration_in_progress:
+        if not self.calibration_mode:
             print("No calibration in progress")
             return
             
-        # Restore previous calibration
-        self.draft_calibration = self.calibration.copy() if self.is_calibrated else {}
-        self._calibration_in_progress = False
+        # Restore previous calibration state
+        self.temp_calibration_data = {}
+        self.calibration_mode = False
         print("Calibration cancelled")
         
     def set_calibration_point(self, servo_id, point_name, position=None): 
-        if not self._calibration_in_progress:
-            raise RuntimeError("Calibration not in progress. Call start_calibration() first.")
+        assert self.connected, "Not connected to servos. Call connect() first."
+        assert self.calibration_mode, "Calibration not in progress. Call start_calibration() first."
             
         if servo_id not in self.servo_ids:
             raise ValueError(f"Unknown servo ID: {servo_id}")
@@ -242,12 +272,14 @@ class Servos:
         if position is None:
             position = self.get_positions()[servo_id]
             
-        # Update draft calibration
-        servo_cal = self.draft_calibration.setdefault(str(servo_id), {})
+        # Update temp calibration
+        servo_cal = self.temp_calibration_data.setdefault(str(servo_id), {})
         servo_cal[point_name] = position
         print(f"Set {point_name} for servo {servo_id}: {position}")
         
     def iterative_calibration(self):
+        assert self.connected, "Not connected to servos. Call connect() first."
+        
         # Start calibration process
         self.start_calibration()
         
@@ -276,7 +308,6 @@ class Servos:
             
             if input("\nSave calibration data? (y/n): ").lower().startswith('y'):
                 self.end_calibration()
-                self.enable_torque()
             else:
                 self.cancel_calibration()
         
@@ -284,7 +315,6 @@ class Servos:
             self.cancel_calibration()
             print(f"Calibration failed: {e}")
         
-
     # Config and file operations
     def _load_config(self):
         try:
@@ -316,8 +346,7 @@ class Servos:
 
     # Low-level communication
     def _read(self, data_name, servo_ids=None):
-        if not self._is_connected:
-            self.connect()
+        assert self.connected, "Not connected to servos. Call connect() first."
 
         self.port_handler.ser.reset_output_buffer()
         self.port_handler.ser.reset_input_buffer()
@@ -346,8 +375,7 @@ class Servos:
         return np.array([reader.getData(id, addr, size) for id in servo_ids], dtype=np.int32)
 
     def _write(self, data_name, values=None, servo_ids=None):
-        if not self._is_connected:
-            self.connect()
+        assert self.connected, "Not connected to servos. Call connect() first."
 
         self.port_handler.ser.reset_output_buffer()
         self.port_handler.ser.reset_input_buffer()
@@ -381,6 +409,21 @@ class Servos:
         else:
             raise RuntimeError("Communication error during write")
 
+    def _configure_servos(self):
+        assert self.connected, "Not connected to servos. Call connect() first."
+            
+        # Configure but don't automatically enable torque
+        for servo_id in self.servo_ids:
+            self._write("Mode", 0, servo_id)
+            self._write("P_Coefficient", self.p_coef, servo_id)
+            self._write("I_Coefficient", self.i_coef, servo_id)
+            self._write("D_Coefficient", self.d_coef, servo_id)            
+            self._write("Lock", 0, servo_id)
+            self._write("Maximum_Acceleration", self.max_accel, servo_id)
+            self._write("Acceleration", self.accel, servo_id)
+            
+        print("Servos configured")
+
     def _to_bytes(self, value, size):
         if size == 1:
             return [value & 0xFF]
@@ -397,7 +440,8 @@ class Servos:
             raise ValueError(f"Unsupported byte size: {size}")
         
     def _position_to_angle(self, servo_id, position):
-        """Convert servo position to angle in degrees."""
+        assert self.is_calibrated, "Servos not calibrated. Run calibration procedure first."
+        
         servo_id_str = str(servo_id)
         zero = self.calibration[servo_id_str]['zero']
         min_pos = self.calibration[servo_id_str]['min']
@@ -441,7 +485,8 @@ class Servos:
             return angle if is_reversed else -angle
         
     def _angle_to_position(self, servo_id, angle):
-        """Convert angle in degrees to servo position."""
+        assert self.is_calibrated, "Servos not calibrated. Run calibration procedure first."
+        
         servo_id_str = str(servo_id)
         zero = self.calibration[servo_id_str]['zero']
         min_pos = self.calibration[servo_id_str]['min']

@@ -8,6 +8,7 @@ def calibrate_servos():
     servos = Servos()
     
     try:
+        servos.connect()
         servos.start_calibration()
         servo_ids = servos.get_servos()
         
@@ -15,7 +16,7 @@ def calibrate_servos():
         print(f"Found {len(servo_ids)} servos: {servo_ids}")
         
         # Process one servo at a time
-        for servo_id in servo_ids:
+        for servo_id in servo_ids[:1]:
             print(f"\n=== Servo ID {servo_id} ===")
             
             # Zero position
@@ -39,7 +40,6 @@ def calibrate_servos():
         # Confirm before saving
         if input("\nSave calibration? (y/n): ").lower().startswith('y'):
             servos.end_calibration()
-            servos.enable_torque()
         else:
             servos.cancel_calibration()
     
@@ -53,6 +53,7 @@ def run_iterative_calibration():
     servos = Servos()
     
     try:
+        servos.connect()
         # Run the built-in calibration process
         servos.iterative_calibration()
     finally:
