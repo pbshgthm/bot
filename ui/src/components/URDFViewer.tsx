@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -610,9 +610,9 @@ const URDFViewer = ({ onRobotLoaded }: URDFViewerProps) => {
           path,
           (geometry: THREE.BufferGeometry) => {
             const material = new THREE.MeshStandardMaterial({
-              color: 0x888888,
-              metalness: 0.5,
-              roughness: 0.3,
+              color: 0x222222,
+              metalness: 0.9,
+              roughness: 0.2,
             });
 
             const mesh = new THREE.Mesh(geometry, material);

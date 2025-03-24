@@ -1,0 +1,4 @@
+{
+  "port": "/dev/tty.usbmodem58FA0829321",
+  "servo_ids": [1, 2, 3, 4, 5, 6]
+}
