@@ -44,7 +44,7 @@ function App() {
   const updatingFromServer = useRef(false);
   // Throttle UI updates from SSE
   const lastUpdateTimeRef = useRef(0);
-  const throttleTimeMs = 50; // Reduced from 250ms to 50ms
+  const throttleTimeMs = 50;
   // Track connection status internally to avoid multiple state updates
   const connectedRef = useRef(false);
   // Track SSE cleanup function
@@ -76,15 +76,6 @@ function App() {
     // Store reference
     robotRef.current = loadedRobot;
     setRobot(loadedRobot);
-
-    // Check if the joint mapping has the correct names
-    if (loadedRobot && loadedRobot.joints) {
-      Object.keys(JOINT_TO_SERVO_ID).forEach((jointName) => {
-        if (!loadedRobot.joints[jointName]) {
-          // Joint not found in model
-        }
-      });
-    }
   }, []);
 
   // Update the UI status without causing too many re-renders
@@ -106,8 +97,6 @@ function App() {
 
   // Set up SSE connection for real-time updates
   useEffect(() => {
-    console.log("Setting up SSE connection for servo position updates");
-
     // Set up SSE listener for servo position updates
     const cleanup = addSSEListener("servo_positions", (data) => {
       const lastUpdateTime = lastUpdateTimeRef.current;
@@ -230,14 +219,13 @@ function App() {
         }));
 
         // Use a debounced update to the server to reduce network traffic
-        // This will still send updates, but not for every tiny movement
         if (!updatePositionTimeoutRef.current) {
           updatePositionTimeoutRef.current = setTimeout(() => {
             updateServoPosition(servoId, angle).catch(() => {
               // Handle error
             });
             updatePositionTimeoutRef.current = null;
-          }, 50); // Send at most every 50ms
+          }, 50);
         }
       }
     }
@@ -298,64 +286,12 @@ function App() {
     }
   }, []);
 
-  // Function to fetch and apply the latest positions from the server
-  const fetchAndApplyLatestPositions = useCallback(async () => {
-    try {
-      const positions = await getServoPositions();
-      console.log("Fetched latest positions from server:", positions);
-
-      if (robotRef.current) {
-        // Update each joint in the 3D model based on servo ID
-        Object.entries(positions).forEach(([servoIdStr, degrees]) => {
-          const servoId = Number(servoIdStr);
-          const jointName = getJointNameById(servoId);
-
-          if (jointName && robotRef.current?.joints[jointName]) {
-            // Ensure we're working with a number
-            const degreeValue =
-              typeof degrees === "number"
-                ? degrees
-                : parseFloat(String(degrees));
-            const radians = (degreeValue * Math.PI) / 180;
-
-            // Update the 3D model joint
-            robotRef.current.setJointValue(jointName, radians);
-          }
-        });
-
-        // Also update our local joint angles state
-        setJointAngles((prevAngles) => {
-          const newAngles = { ...prevAngles };
-
-          Object.entries(positions).forEach(([servoIdStr, degrees]) => {
-            const servoId = Number(servoIdStr);
-            const jointName = getJointNameById(servoId);
-
-            if (jointName) {
-              // Update our local state with the degree value
-              const degreeValue =
-                typeof degrees === "number"
-                  ? degrees
-                  : parseFloat(String(degrees));
-              newAngles[jointName] = degreeValue;
-            }
-          });
-
-          return newAngles;
-        });
-      }
-    } catch (error) {
-      console.error("Error fetching latest positions:", error);
-    }
-  }, []);
-
   // Handle completing calibration
   const handleCompleteCalibration = useCallback(async () => {
     try {
       // Reset the 3D model to show real positions immediately
       if (robotRef.current) {
         // Apply current positions immediately to reduce perceived lag
-        // This gives visual feedback while the API call is processing
         try {
           const positions = await getServoPositions();
 
@@ -404,11 +340,41 @@ function App() {
         await cancelCalibration();
       }
 
+      // Ensure torque is enabled correctly
+      try {
+        // Force enable torque explicitly
+        await setTorqueEnabled(true);
+        setTorqueEnabledState(true);
+
+        // Verify torque state with retry mechanism
+        let retryCount = 0;
+        const verifyTorque = async () => {
+          try {
+            const torqueState = await getTorqueEnabled();
+            if (!torqueState && retryCount < 3) {
+              retryCount++;
+              console.log(`Torque not enabled, retrying (${retryCount}/3)...`);
+              await setTorqueEnabled(true);
+              setTimeout(verifyTorque, 500);
+            } else {
+              setTorqueEnabledState(torqueState);
+            }
+          } catch (error) {
+            console.error("Error verifying torque state:", error);
+          }
+        };
+
+        // Start verification after a short delay
+        setTimeout(verifyTorque, 500);
+      } catch (error) {
+        console.error("Error setting torque:", error);
+      }
+
       // Reset flags and reconnect SSE with minimal delay
       updatingFromServer.current = false;
 
       // Re-enable SSE position updates
-      setTimeout(async () => {
+      setTimeout(() => {
         isDraggingRef.current = false;
 
         // Refresh SSE connection
@@ -473,12 +439,11 @@ function App() {
 
           sseCleanupRef.current = cleanup;
         }
-      }, 100); // Reduced from 500ms to 100ms
+      }, 100);
     } catch (error) {
-      // Handle errors
       console.error("Error in handleCompleteCalibration:", error);
     }
-  }, [isCalibrating, getJointNameById]);
+  }, [isCalibrating]);
 
   // Function to update the 3D model with target positions during calibration
   const updateRobotModelForCalibration = useCallback(

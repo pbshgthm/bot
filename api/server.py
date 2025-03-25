@@ -28,13 +28,15 @@ servo_controller = None
 is_calibrating = False
 sse_clients = {}  # Changed from set to dict using client IDs as keys
 
-# Add CORS middleware
+# CORS Configuration - Simplified
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Specify actual origin instead of wildcard
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=86400,  # Cache preflight for 24 hours
 )
 
 # SSE client management
@@ -241,7 +243,7 @@ async def complete_calibration():
     if servo_controller and servo_controller.connected and is_calibrating:
         is_calibrating = False
         servo_controller.end_calibration()
-        servo_controller.enable_torque()
+        servo_controller.set_torque_enabled(True)
         return {"status": "success", "message": "Calibration completed successfully"}
     return {"status": "error", "message": "Not in calibration mode or servo controller not connected"}
 
