@@ -31,19 +31,18 @@ export const initSSE = (): EventSource => {
   // Create new connection
   eventSource = new EventSource(SSE_URL);
 
+  // Add event source options to encourage more frequent updates
+  if (eventSource.readyState === EventSource.CONNECTING) {
+    // Set a small retry timeout in case of connection issues
+    eventSource.addEventListener("error", () => {
+      if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+        setTimeout(() => initSSE(), 1000); // Quick reconnect on failure
+      }
+    });
+  }
+
   eventSource.onopen = () => {
     // SSE connection established
-  };
-
-  eventSource.onerror = () => {
-    // SSE connection error, attempt to reconnect after a delay
-    setTimeout(() => {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-        initSSE();
-      }
-    }, 3000);
   };
 
   eventSource.onmessage = (event) => {

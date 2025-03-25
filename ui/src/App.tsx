@@ -44,7 +44,7 @@ function App() {
   const updatingFromServer = useRef(false);
   // Throttle UI updates from SSE
   const lastUpdateTimeRef = useRef(0);
-  const throttleTimeMs = 50;
+  const throttleTimeMs = 10;
   // Track connection status internally to avoid multiple state updates
   const connectedRef = useRef(false);
   // Track SSE cleanup function
@@ -135,13 +135,14 @@ function App() {
                           : parseFloat(String(degrees));
                       const radians = (degreeValue * Math.PI) / 180;
 
-                      // Update the 3D model joint directly
+                      // Update the 3D model joint directly - high priority for responsiveness
                       robotRef.current.setJointValue(jointName, radians);
 
-                      // Update our local state
+                      // Only update React state if the change is significant
+                      // Use a smaller threshold for detecting changes (0.05 degrees vs 0.1)
                       if (
                         !newAngles[jointName] ||
-                        Math.abs(newAngles[jointName] - degreeValue) > 0.1
+                        Math.abs(newAngles[jointName] - degreeValue) > 0.05
                       ) {
                         newAngles[jointName] = degreeValue;
                         hasChanges = true;
@@ -150,7 +151,7 @@ function App() {
                   }
                 );
 
-                // Only update state if something changed
+                // Only update state if something changed - minimizes React re-renders
                 if (hasChanges) {
                   setJointAngles(newAngles);
                 }
@@ -225,7 +226,7 @@ function App() {
               // Handle error
             });
             updatePositionTimeoutRef.current = null;
-          }, 50);
+          }, 10);
         }
       }
     }
@@ -237,7 +238,7 @@ function App() {
     // This gives time for our last command to be processed
     setTimeout(() => {
       isDraggingRef.current = false;
-    }, 300);
+    }, 100);
   }, []);
 
   // Initialize by getting the torque status

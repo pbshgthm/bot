@@ -445,8 +445,15 @@ const URDFViewer = ({ onRobotLoaded }: URDFViewerProps) => {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
 
+      // Request next frame with higher priority
       frameIdRef.current = requestAnimationFrame(animate);
     };
+
+    // Set render priority to high
+    if (rendererRef.current) {
+      // Use higher precision rendering for smoother joint movements
+      rendererRef.current.setPixelRatio(window.devicePixelRatio);
+    }
 
     animate();
 

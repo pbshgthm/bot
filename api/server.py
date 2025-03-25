@@ -61,7 +61,7 @@ async def broadcast_sse_message(data: str):
 # Continuously broadcast servo positions via SSE
 async def broadcast_positions():
     last_broadcast = {}
-    broadcast_interval = 0.25
+    broadcast_interval = 0.01  # Changed from 0.25 to 0.01 for 100Hz updates
     
     while True:
         try:
@@ -72,17 +72,18 @@ async def broadcast_positions():
                     
                     for key, value in positions.items():
                         last_value = last_broadcast.get(key, 0)
-                        if abs(value - last_value) > 0.5:
+                        if abs(value - last_value) > 0.05:  # Reduced threshold from 0.5 to 0.05
                             has_changes = True
                             break
                     
-                    if has_changes or not last_broadcast:
-                        message = json.dumps({
-                            'type': 'servo_positions',
-                            'positions': positions
-                        })
-                        await broadcast_sse_message(message)
-                        last_broadcast = positions.copy()
+                    # Always broadcast to ensure consistent timing for better client-side rendering
+                    # whether there are changes or not
+                    message = json.dumps({
+                        'type': 'servo_positions',
+                        'positions': positions
+                    })
+                    await broadcast_sse_message(message)
+                    last_broadcast = positions.copy()
                 except Exception as e:
                     print(f"Error in broadcast_positions: {e}")
             
