@@ -1,237 +1,159 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   captureCalibrationPosition,
   endCalibration,
-  setCalibrationStep,
 } from "../services/ServoAPI";
 
 interface CalibrationUIProps {
-  isCalibrating: boolean;
-  currentStep: {
-    joint: string;
-    angle: number;
-    current_step?: number;
-    total_steps?: number;
-  } | null;
-  jointToServoId: Record<string, number>;
-  robot3DRef: any;
-  onCalibrationComplete: () => void;
+  jointToServoIdMap: Record<string, number>;
+  allServoIds: number[];
+  onComplete: () => void;
+  updateRobotModel: (jointName: string, angleDegrees: number) => void;
 }
 
+// Define the calibration positions in the sequence they should be captured
+const CALIBRATION_POSITIONS = [
+  { angle: 0, label: "Center (0°)" },
+  { angle: 90, label: "Maximum (90°)" },
+  { angle: -90, label: "Minimum (-90°)" },
+];
+
 const CalibrationUI: React.FC<CalibrationUIProps> = ({
-  isCalibrating,
-  currentStep,
-  jointToServoId,
-  robot3DRef,
-  onCalibrationComplete,
+  jointToServoIdMap,
+  allServoIds,
+  onComplete,
+  updateRobotModel,
 }) => {
-  const [captureSuccess, setCaptureSuccess] = React.useState(false);
+  // Track the current servo being calibrated
+  const [currentServoIndex, setCurrentServoIndex] = useState(0);
+  // Track the current position being calibrated for the current servo
+  const [currentPositionIndex, setCurrentPositionIndex] = useState(0);
 
-  // Get the joint name by servo ID
-  const getJointNameById = useCallback(
-    (servoId: number): string | undefined => {
-      return Object.entries(jointToServoId).find(
-        ([_, id]) => id === servoId
-      )?.[0];
-    },
-    [jointToServoId]
-  );
+  // Calculate total steps
+  const totalSteps = allServoIds.length * CALIBRATION_POSITIONS.length;
+  const currentStep =
+    currentServoIndex * CALIBRATION_POSITIONS.length + currentPositionIndex + 1;
 
-  // Update 3D model when calibration step changes
+  // Get current servo ID and joint name
+  const currentServoId = allServoIds[currentServoIndex];
+  const currentJointName =
+    Object.entries(jointToServoIdMap).find(
+      ([_, id]) => id === currentServoId
+    )?.[0] || String(currentServoId);
+
+  // Get current angle to calibrate
+  const currentPosition = CALIBRATION_POSITIONS[currentPositionIndex];
+  const currentAngle = currentPosition.angle;
+
+  // Update the 3D model when the current servo or position changes
   useEffect(() => {
-    if (isCalibrating && currentStep && robot3DRef.current) {
-      const { joint, angle } = currentStep;
-      const servoId = Number(joint);
-      const jointName = getJointNameById(servoId);
+    // Use requestAnimationFrame for smoother updates
+    requestAnimationFrame(() => {
+      // Update the 3D model to show the target position
+      updateRobotModel(currentJointName, currentAngle);
+    });
+  }, [
+    currentServoIndex,
+    currentPositionIndex,
+    currentJointName,
+    currentAngle,
+    updateRobotModel,
+  ]);
 
-      if (!jointName) return;
-
-      // Reset all joints to zero except active joint
-      Object.keys(robot3DRef.current.joints).forEach((robotJointName) => {
-        if (jointName && robotJointName === jointName) {
-          // Set the active joint to the calibration angle
-          const radians = (angle * Math.PI) / 180;
-          robot3DRef.current.setJointValue(robotJointName, radians);
-        } else {
-          robot3DRef.current.setJointValue(robotJointName, 0);
-        }
-      });
-    }
-  }, [currentStep, isCalibrating, getJointNameById, robot3DRef]);
+  // Get the joint name to display
+  const getDisplayName = (jointName: string): string => {
+    return jointName || "Unknown Joint";
+  };
 
   const handleCapturePosition = useCallback(() => {
-    if (!currentStep) return;
-
-    const { joint, angle, current_step } = currentStep;
-    const stepNumber = current_step || 1;
-    const servoId = Number(joint);
-
-    // Show success immediately for better user experience
-    setCaptureSuccess(true);
-    setTimeout(() => setCaptureSuccess(false), 1500);
-
-    // Send the capture request
-    captureCalibrationPosition(servoId.toString(), angle, stepNumber)
+    // Send the capture request immediately without visual change
+    captureCalibrationPosition(currentServoId, currentAngle, currentStep)
       .then(() => {
-        // Move to next step
-        const allServos = Object.values(jointToServoId) as number[];
-        const allAngles = [0, 90, -90]; // Zero, max, min
-
-        // Find current position in sequence
-        const currentServoIndex = allServos.findIndex((id) => id === servoId);
-        const currentAngleIndex = allAngles.findIndex((a) => a === angle);
-
-        if (currentServoIndex >= 0 && currentAngleIndex >= 0) {
-          // Calculate next position
-          let nextAngleIndex = (currentAngleIndex + 1) % allAngles.length;
-          let nextServoIndex = currentServoIndex;
-
-          // If we've gone through all angles for this joint, move to the next joint
-          if (nextAngleIndex === 0) {
-            nextServoIndex = (currentServoIndex + 1) % allServos.length;
-          }
-
-          // Check if we've completed the full cycle
-          if (
-            nextServoIndex === 0 &&
-            nextAngleIndex === 0 &&
-            (currentServoIndex > 0 || currentAngleIndex > 0)
-          ) {
-            // We've completed the full cycle
-            endCalibration()
-              .then(() => {
-                onCalibrationComplete();
-              })
-              .catch((error) => {
-                alert("Failed to end calibration. See console for details.");
-              });
-          } else {
-            // Move to the next step
-            const nextServoId = allServos[nextServoIndex];
-            const nextAngle = allAngles[nextAngleIndex];
-            const totalSteps = allServos.length * allAngles.length;
-            const nextStep =
-              nextServoIndex * allAngles.length + nextAngleIndex + 1;
-
-            // Send to server
-            setCalibrationStep(
-              nextServoId,
-              nextAngle,
-              nextStep,
-              totalSteps
-            ).catch(() => {
-              alert("Failed to move to next calibration step.");
+        // Move to next position or servo immediately
+        if (currentPositionIndex < CALIBRATION_POSITIONS.length - 1) {
+          // Move to next position for the same servo
+          setCurrentPositionIndex(currentPositionIndex + 1);
+        } else if (currentServoIndex < allServoIds.length - 1) {
+          // Move to next servo, reset position index
+          setCurrentServoIndex(currentServoIndex + 1);
+          setCurrentPositionIndex(0);
+        } else {
+          // Calibration complete - all servos and positions done
+          endCalibration()
+            .then(() => {
+              onComplete();
+            })
+            .catch(() => {
+              // Handle error
             });
-          }
         }
       })
       .catch(() => {
-        setCaptureSuccess(false);
-        alert("Failed to capture position.");
+        // Handle error silently
       });
-  }, [currentStep, jointToServoId, onCalibrationComplete]);
-
-  if (!isCalibrating || !currentStep) {
-    return null;
-  }
+  }, [
+    currentServoId,
+    currentAngle,
+    currentStep,
+    currentPositionIndex,
+    currentServoIndex,
+    allServoIds,
+    onComplete,
+  ]);
 
   return (
-    <div className="bg-white/95 backdrop-blur-md rounded-lg p-4 mb-2 border-2 border-orange-500">
-      <h3 className="text-lg font-bold mb-3 text-orange-600">
-        Calibration Mode
-      </h3>
-      <div className="mb-4">
-        <div className="flex justify-between text-sm text-gray-600 mb-1">
-          <span>
-            Step {currentStep.current_step} of {currentStep.total_steps}
-          </span>
-          <span>
-            {Math.round(
-              ((currentStep.current_step || 0) /
-                (currentStep.total_steps || 1)) *
-                100
-            )}
-            %
-          </span>
-        </div>
-        <div className="w-full bg-gray-200 rounded-full h-2">
+    <div className="bg-white/90 backdrop-blur rounded-lg p-3 overflow-y-auto max-h-full shadow-md">
+      {/* Header with step progress */}
+      <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
+        <span className="text-xs font-medium text-gray-600">Calibration</span>
+        <span className="text-xs text-gray-500 font-medium">
+          {currentStep}/{totalSteps}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="mb-3">
+        <div className="w-full bg-gray-100 rounded-full h-1">
           <div
-            className="bg-orange-500 h-2 rounded-full"
+            className="bg-gray-400 h-1 rounded-full"
             style={{
-              width: `${Math.round(
-                ((currentStep.current_step || 0) /
-                  (currentStep.total_steps || 1)) *
-                  100
-              )}%`,
+              width: `${Math.round((currentStep / totalSteps) * 100)}%`,
             }}
           ></div>
         </div>
       </div>
 
-      <div className="bg-orange-50 rounded-lg p-4 mb-4 border border-orange-200">
-        <h4 className="text-base font-bold mb-2 text-gray-800">
-          Current Task:
-        </h4>
-
-        <div className="flex items-center justify-center mb-3">
-          <div className="bg-orange-100 rounded-full px-4 py-2 font-bold text-orange-800">
-            {getJointNameById(Number(currentStep.joint)) ||
-              `Joint ${currentStep.joint}`}
-          </div>
-          <div className="mx-2 text-gray-400">→</div>
-          <div className="bg-blue-100 rounded-full px-4 py-2 font-bold text-blue-800">
-            {currentStep.angle}°
-          </div>
+      {/* Current joint/position to calibrate - simplified */}
+      <div className="flex items-center justify-center mb-2.5 text-xs">
+        <div className="bg-gray-100 rounded-full px-2 py-1 font-medium text-gray-700">
+          {getDisplayName(currentJointName)}
         </div>
-
-        <div className="text-sm text-gray-700 bg-white p-3 rounded border border-gray-200">
-          <ol className="list-decimal pl-5 space-y-2">
-            <li>
-              Manually position the{" "}
-              <strong className="text-orange-600">
-                {getJointNameById(Number(currentStep.joint)) ||
-                  `Joint ${currentStep.joint}`}
-              </strong>{" "}
-              joint to{" "}
-              <strong className="text-blue-600">{currentStep.angle}°</strong>
-            </li>
-            <li>Check the 3D model to see the correct position</li>
-            <li>
-              Click "Capture Position" when the joint is properly positioned
-            </li>
-          </ol>
+        <div className="mx-1.5 text-gray-400">→</div>
+        <div className="bg-gray-100 rounded-full px-2 py-1 font-medium text-gray-700">
+          {currentPosition.label}
         </div>
       </div>
 
-      <button
-        onClick={handleCapturePosition}
-        className={`w-full ${
-          captureSuccess
-            ? "bg-green-600 hover:bg-green-700"
-            : "bg-green-500 hover:bg-green-600"
-        } text-white py-3 rounded-lg font-medium text-base transition-colors relative`}
-        disabled={captureSuccess}
-      >
-        {captureSuccess ? (
+      {/* Simple instruction text */}
+      <div className="text-xs text-gray-500 mb-3 text-center">
+        Position joint to shown angle, then tap Capture
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex space-x-2">
+        <button
+          onClick={onComplete}
+          className="flex-1 px-3 py-1.5 bg-gray-400 hover:bg-gray-500 text-white text-xs rounded"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleCapturePosition}
+          className="flex-1 bg-green-400 active:bg-green-600 hover:bg-green-500 text-white py-1.5 px-3 rounded text-xs"
+        >
           <span className="flex items-center justify-center">
             <svg
-              className="w-5 h-5 mr-2"
-              fill="currentColor"
-              viewBox="0 0 20 20"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                fillRule="evenodd"
-                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                clipRule="evenodd"
-              ></path>
-            </svg>
-            Position Captured!
-          </span>
-        ) : (
-          <span className="flex items-center justify-center">
-            <svg
-              className="w-5 h-5 mr-2"
+              className="w-3.5 h-3.5 mr-1"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -244,10 +166,10 @@ const CalibrationUI: React.FC<CalibrationUIProps> = ({
                 d="M5 13l4 4L19 7"
               />
             </svg>
-            Capture Position
+            Capture
           </span>
-        )}
-      </button>
+        </button>
+      </div>
     </div>
   );
 };

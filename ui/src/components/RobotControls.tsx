@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback } from "react";
 
 interface JointControl {
   name: string;
@@ -6,16 +6,17 @@ interface JointControl {
   min: number;
   max: number;
   type: string;
+  id: string;
 }
 
 interface RobotControlsProps {
-  robot: any; // Using 'any' here since the URDF robot type is not well defined in TypeScript
-  onJointChange?: (jointName: string, value: number) => void;
-  onDragStart?: () => void;
+  jointAngles: Record<string, number>;
+  onAngleChange: (jointName: string, angle: number) => void;
   onDragEnd?: () => void;
-  jointValues?: Record<string, number>;
-  isCalibrating?: boolean;
-  torqueEnabled?: boolean;
+  torqueEnabled: boolean;
+  onTorqueToggle: () => Promise<void>;
+  onStartCalibration: () => Promise<void>;
+  isCalibrating: boolean;
 }
 
 // Joint slider component with minimalist design
@@ -23,13 +24,11 @@ const JointSlider = memo(
   ({
     joint,
     onChange,
-    onDragStart,
     onDragEnd,
     torqueEnabled = true,
   }: {
     joint: JointControl;
     onChange: (joint: JointControl, value: number) => void;
-    onDragStart?: () => void;
     onDragEnd?: () => void;
     torqueEnabled?: boolean;
   }) => {
@@ -54,22 +53,22 @@ const JointSlider = memo(
     };
 
     return (
-      <li key={joint.name} className="mb-3">
+      <li key={joint.id} className="mb-2.5">
         <div className="flex items-center justify-between mb-0.5">
           <div className="flex items-center">
             <span
-              className="font-medium text-xs text-gray-900 truncate"
+              className="font-medium text-xs text-gray-700 truncate"
               title={joint.name}
             >
               {joint.name}
             </span>
             {!torqueEnabled && (
               <span
-                className="ml-1.5 inline-flex items-center text-red-500"
+                className="ml-1 inline-flex items-center text-red-500"
                 title="Read-only: Torque disabled"
               >
                 <svg
-                  className="w-3 h-3"
+                  className="w-2.5 h-2.5"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                   xmlns="http://www.w3.org/2000/svg"
@@ -83,12 +82,12 @@ const JointSlider = memo(
               </span>
             )}
           </div>
-          <span className="text-xs text-gray-600 font-mono">
+          <span className="text-xs text-gray-500 font-mono">
             {((joint.value * 180) / Math.PI).toFixed(1)}°
           </span>
         </div>
 
-        <div className="relative pb-3">
+        <div className="relative pb-2.5">
           {/* Slider track with custom styling */}
           <input
             type="range"
@@ -99,15 +98,13 @@ const JointSlider = memo(
             onChange={(e) =>
               torqueEnabled && onChange(joint, parseFloat(e.target.value))
             }
-            onMouseDown={() => torqueEnabled && onDragStart?.()}
-            onTouchStart={() => torqueEnabled && onDragStart?.()}
             onMouseUp={() => torqueEnabled && onDragEnd?.()}
             onTouchEnd={() => torqueEnabled && onDragEnd?.()}
             onMouseLeave={(e) => {
               // Only trigger dragEnd if the primary button is still pressed
               if (e.buttons === 1 && torqueEnabled) onDragEnd?.();
             }}
-            className={`w-full h-1.5 appearance-none bg-gray-200 rounded-full outline-none ${
+            className={`w-full h-1 appearance-none bg-gray-200 rounded-full outline-none ${
               torqueEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"
             } slider-input`}
             style={{
@@ -126,12 +123,12 @@ const JointSlider = memo(
                   : "cursor-not-allowed opacity-70"
               }`}
               onClick={() => torqueEnabled && onChange(joint, minDeg)}
-              style={{ width: "20px" }}
+              style={{ width: "16px" }}
             >
-              <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
+              <div className="h-1 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
               <span
-                className="text-[8px] text-gray-400 group-hover:text-gray-600 truncate"
-                style={{ maxWidth: "30px" }}
+                className="text-[7px] text-gray-400 group-hover:text-gray-600 truncate"
+                style={{ maxWidth: "24px" }}
               >
                 {formatDeg(minDeg)}
               </span>
@@ -145,10 +142,10 @@ const JointSlider = memo(
                   : "cursor-not-allowed opacity-70"
               }`}
               onClick={() => torqueEnabled && onChange(joint, centerDeg)}
-              style={{ width: "20px" }}
+              style={{ width: "16px" }}
             >
-              <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
-              <span className="text-[8px] text-gray-400 group-hover:text-gray-600">
+              <div className="h-1 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
+              <span className="text-[7px] text-gray-400 group-hover:text-gray-600">
                 {formatDeg(centerDeg)}
               </span>
             </div>
@@ -161,12 +158,12 @@ const JointSlider = memo(
                   : "cursor-not-allowed opacity-70"
               }`}
               onClick={() => torqueEnabled && onChange(joint, maxDeg)}
-              style={{ width: "20px" }}
+              style={{ width: "16px" }}
             >
-              <div className="h-1.5 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
+              <div className="h-1 w-px bg-gray-300 group-hover:bg-gray-500 transition-colors" />
               <span
-                className="text-[8px] text-gray-400 group-hover:text-gray-600 truncate"
-                style={{ maxWidth: "30px" }}
+                className="text-[7px] text-gray-400 group-hover:text-gray-600 truncate"
+                style={{ maxWidth: "24px" }}
               >
                 {formatDeg(maxDeg)}
               </span>
@@ -178,30 +175,29 @@ const JointSlider = memo(
   }
 );
 
-JointSlider.displayName = "JointSlider";
-
-// Add custom styling for the range input thumb - making it smaller for compact layout
-const globalStyles = `
+// Add custom styling for the range input thumb
+const styleTag = document.createElement("style");
+styleTag.textContent = `
   .slider-input::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 0.875rem;
-    height: 0.875rem;
+    width: 0.75rem;
+    height: 0.75rem;
     border-radius: 50%;
     background: #4b5563;
     cursor: pointer;
     border: none;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   
   .slider-input::-moz-range-thumb {
-    width: 0.875rem;
-    height: 0.875rem;
+    width: 0.75rem;
+    height: 0.75rem;
     border-radius: 50%;
     background: #4b5563;
     cursor: pointer;
     border: none;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   
   .slider-input:disabled::-webkit-slider-thumb {
@@ -218,160 +214,158 @@ const globalStyles = `
     opacity: 0.7;
   }
 `;
+document.head.appendChild(styleTag);
+
+// Define joint limits based on URDF model
+const JOINT_LIMITS: Record<string, { min: number; max: number; type: string }> =
+  {
+    "1-servo_1-yaw": { min: -Math.PI / 2, max: Math.PI / 2, type: "revolute" },
+    "2-servo_2-pitch": {
+      min: -Math.PI / 2,
+      max: Math.PI / 2,
+      type: "revolute",
+    },
+    "3-servo_3-pitch": {
+      min: -Math.PI / 2,
+      max: Math.PI / 2,
+      type: "revolute",
+    },
+    "4-servo_4-pitch": {
+      min: -Math.PI / 2,
+      max: Math.PI / 2,
+      type: "revolute",
+    },
+    "5-servo_5-roll": { min: -Math.PI / 2, max: Math.PI / 2, type: "revolute" },
+    "6-servo_6-grip": {
+      min: -Math.PI / 2,
+      max: Math.PI / 2,
+      type: "prismatic",
+    },
+  };
+
+// Friendly names for the joints
+const JOINT_NAMES: Record<string, string> = {
+  "1-servo_1-yaw": "Base",
+  "2-servo_2-pitch": "Shoulder",
+  "3-servo_3-pitch": "Elbow",
+  "4-servo_4-pitch": "Wrist Pitch",
+  "5-servo_5-roll": "Wrist Roll",
+  "6-servo_6-grip": "Gripper",
+};
 
 const RobotControls = ({
-  robot,
-  onJointChange,
-  onDragStart,
+  jointAngles,
+  onAngleChange,
   onDragEnd,
-  jointValues = {},
+  torqueEnabled,
+  onTorqueToggle,
+  onStartCalibration,
   isCalibrating,
-  torqueEnabled = true,
 }: RobotControlsProps) => {
-  const [joints, setJoints] = useState<JointControl[]>([]);
+  // Convert joint angles to JointControl objects
+  const jointControls = Object.keys(JOINT_LIMITS).map((jointName) => {
+    const limits = JOINT_LIMITS[jointName];
+    const value = jointAngles[jointName] || 0;
+    // Convert degrees to radians for the control
+    const valueInRadians = (value * Math.PI) / 180;
 
-  // Initial setup of joints from robot
-  useEffect(() => {
-    if (!robot || !robot.joints) return;
+    return {
+      name: JOINT_NAMES[jointName] || jointName,
+      value: valueInRadians,
+      min: limits.min,
+      max: limits.max,
+      type: limits.type,
+      id: jointName,
+    };
+  });
 
-    // Create joint controls from robot joints
-    const jointControls = Object.keys(robot.joints)
-      .sort((a, b) => {
-        const da = a
-          .split(/[^\d]+/g)
-          .filter((v) => !!v)
-          .pop();
-        const db = b
-          .split(/[^\d]+/g)
-          .filter((v) => !!v)
-          .pop();
-
-        if (da !== undefined && db !== undefined) {
-          const delta = parseFloat(da) - parseFloat(db);
-          if (delta !== 0) return delta;
-        }
-
-        if (a > b) return 1;
-        if (b > a) return -1;
-        return 0;
-      })
-      .map((key) => {
-        const joint = robot.joints[key];
-        const value =
-          jointValues[key] !== undefined ? jointValues[key] : joint.angle || 0;
-        return {
-          name: joint.name,
-          value,
-          min: joint.limit ? joint.limit.lower : -3.14,
-          max: joint.limit ? joint.limit.upper : 3.14,
-          type: joint.jointType,
-        };
-      });
-
-    setJoints(jointControls);
-  }, [robot, jointValues]);
-
-  // Update joints when external jointValues change
-  useEffect(() => {
-    if (
-      !robot ||
-      !robot.joints ||
-      joints.length === 0 ||
-      Object.keys(jointValues).length === 0
-    )
-      return;
-
-    // Update joint values from props
-    const updatedJoints = joints.map((joint) => {
-      const newValue = jointValues[joint.name];
-      if (newValue !== undefined && Math.abs(newValue - joint.value) > 0.001) {
-        return { ...joint, value: newValue };
-      }
-      return joint;
-    });
-
-    setJoints(updatedJoints);
-  }, [jointValues, robot]);
-
-  const handleSliderChange = useCallback(
-    (joint: JointControl, value: number) => {
-      if (!robot || !robot.joints) return;
-
-      // Update the joint value - always convert from degrees to radians
-      const actualValue = (value * Math.PI) / 180;
-
-      if (robot.setJointValue) {
-        robot.setJointValue(joint.name, actualValue);
-      }
-
-      if (onJointChange) {
-        onJointChange(joint.name, actualValue);
-      }
-
-      // Update the joint in our state
-      setJoints((prevJoints) =>
-        prevJoints.map((j) =>
-          j.name === joint.name ? { ...j, value: actualValue } : j
-        )
-      );
+  // Handle joint slider change
+  const handleJointChange = useCallback(
+    (joint: JointControl, valueDeg: number) => {
+      // Convert value to radians for the 3D model
+      onAngleChange(joint.id, valueDeg);
     },
-    [robot, onJointChange]
+    [onAngleChange]
   );
 
-  if (!robot || !robot.joints || joints.length === 0) {
-    return <div className="p-4 text-center">No robot joints available</div>;
-  }
-
   return (
-    <div className="bg-white/95 backdrop-blur rounded-lg p-4 overflow-y-auto max-h-full shadow-md">
-      <style>{globalStyles}</style>
-      <h2 className="text-sm font-bold mb-3 text-gray-900 border-b pb-2">
-        Robot Controls
-      </h2>
-
-      {isCalibrating ? (
-        <div className="text-center p-4 text-orange-600 font-medium">
-          Calibration in progress. Sliders disabled.
+    <div className="bg-white/90 backdrop-blur rounded-lg p-3 overflow-y-auto max-h-full shadow-md">
+      {/* Header with controls */}
+      <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
+        <div className="flex items-center">
+          {!isCalibrating && (
+            <div className="flex items-center">
+              <span className="text-xs font-medium text-gray-600 mr-2">
+                Torque
+              </span>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={torqueEnabled}
+                  onChange={onTorqueToggle}
+                  className="sr-only peer"
+                  disabled={isCalibrating}
+                />
+                <div
+                  className={`w-7 h-4 rounded-full peer peer-focus:ring-1 peer-focus:ring-offset-1 
+                    ${
+                      torqueEnabled
+                        ? "bg-green-400 peer-focus:ring-green-300"
+                        : "bg-red-400 peer-focus:ring-red-300"
+                    } 
+                    after:content-[''] after:absolute after:top-0.5 after:left-[2px] 
+                    after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 
+                    after:transition-all ${
+                      torqueEnabled ? "after:translate-x-3" : ""
+                    }`}
+                ></div>
+              </label>
+            </div>
+          )}
+          {isCalibrating && (
+            <span className="text-xs font-medium text-gray-600">
+              Calibrating...
+            </span>
+          )}
         </div>
-      ) : !torqueEnabled ? (
-        <div className="text-center p-2 mb-3 bg-red-50 border border-red-200 rounded-md">
-          <div className="flex items-center justify-center mb-1">
-            <svg
-              className="w-4 h-4 text-red-500 mr-1.5"
-              fill="currentColor"
-              viewBox="0 0 20 20"
-              xmlns="http://www.w3.org/2000/svg"
+        <div>
+          {!isCalibrating ? (
+            <button
+              onClick={() => onStartCalibration()}
+              className="bg-gray-400 hover:bg-gray-500 text-white px-2 py-0.5 rounded text-xs transition-colors"
             >
-              <path
-                fillRule="evenodd"
-                d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                clipRule="evenodd"
-              ></path>
-            </svg>
-            <span className="text-red-600 font-medium">Torque Disabled</span>
-          </div>
-          <p className="text-xs text-red-600">
-            Sliders are in read-only mode. Enable torque to control the robot.
-          </p>
+              Calibrate
+            </button>
+          ) : (
+            <button
+              disabled
+              className="bg-gray-300 cursor-not-allowed text-white px-2 py-0.5 rounded text-xs"
+            >
+              Calibrating...
+            </button>
+          )}
         </div>
-      ) : null}
+      </div>
 
-      <ul className="flex flex-col space-y-1">
-        {joints
-          .filter((joint) => joint.type !== "fixed")
-          .map((joint) => (
-            <JointSlider
-              key={joint.name}
-              joint={joint}
-              onChange={handleSliderChange}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-              torqueEnabled={torqueEnabled}
-            />
-          ))}
+      {isCalibrating && (
+        <div className="text-center py-2 text-gray-500 text-xs font-medium">
+          Calibration in progress
+        </div>
+      )}
+
+      <ul className="flex flex-col space-y-0.5">
+        {jointControls.map((joint) => (
+          <JointSlider
+            key={joint.id}
+            joint={joint}
+            onChange={handleJointChange}
+            onDragEnd={onDragEnd}
+            torqueEnabled={torqueEnabled && !isCalibrating}
+          />
+        ))}
       </ul>
     </div>
   );
 };
 
-export default memo(RobotControls);
+export default RobotControls;

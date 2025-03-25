@@ -1,355 +1,260 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import json
 import asyncio
 import uvicorn
 from core.servos import Servos
 from contextlib import asynccontextmanager
+from typing import Optional
+from pydantic import BaseModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global servo_controller
+    global servo_controller, sse_clients
     try:
+        print("Initializing servo controller...")
         servo_controller = Servos()
         servo_controller.connect()
         asyncio.create_task(broadcast_positions())
-    except Exception:
-        pass
+        print("Servo controller initialized successfully")
+    except Exception as e:
+        print(f"Error initializing servo controller: {e}")
+        servo_controller = None
     yield
 
 app = FastAPI(lifespan=lifespan)
 servo_controller = None
-is_calibrating = False  # Add global flag to track calibration state
+is_calibrating = False
+sse_clients = {}  # Changed from set to dict using client IDs as keys
 
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections = set()
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Specify actual origin instead of wildcard
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.add(websocket)
+# SSE client management
+async def add_sse_client(client_id: str, queue: asyncio.Queue):
+    sse_clients[client_id] = queue
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+async def remove_sse_client(client_id: str):
+    if client_id in sse_clients:
+        del sse_clients[client_id]
 
-    async def broadcast(self, message: str):
-        disconnected = set()
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                disconnected.add(connection)
-        
-        for ws in disconnected:
-            self.active_connections.remove(ws)
+async def send_sse_message(client_id: str, data: str):
+    try:
+        if client_id in sse_clients:
+            await sse_clients[client_id].put(data)
+    except:
+        await remove_sse_client(client_id)
 
-manager = ConnectionManager()
+async def broadcast_sse_message(data: str):
+    for client_id in list(sse_clients.keys()):
+        await send_sse_message(client_id, data)
 
+# Continuously broadcast servo positions via SSE
 async def broadcast_positions():
     last_broadcast = {}
     broadcast_interval = 0.25
     
     while True:
         try:
-            if manager.active_connections and servo_controller and servo_controller.connected and not is_calibrating:  # Add check for calibration state
-                positions = servo_controller.get_angles()
-                has_changes = False
-                
-                for key, value in positions.items():
-                    last_value = last_broadcast.get(key, 0)
-                    if abs(value - last_value) > 0.5:
-                        has_changes = True
-                        break
-                
-                if has_changes or not last_broadcast:
-                    message = json.dumps({
-                        'type': 'servo_positions',
-                        'positions': positions,
-                        'broadcast': True
-                    })
-                    await manager.broadcast(message)
-                    last_broadcast = positions.copy()
+            if sse_clients and servo_controller and servo_controller.connected and not is_calibrating:
+                try:
+                    positions = servo_controller.get_angles()
+                    has_changes = False
+                    
+                    for key, value in positions.items():
+                        last_value = last_broadcast.get(key, 0)
+                        if abs(value - last_value) > 0.5:
+                            has_changes = True
+                            break
+                    
+                    if has_changes or not last_broadcast:
+                        message = json.dumps({
+                            'type': 'servo_positions',
+                            'positions': positions
+                        })
+                        await broadcast_sse_message(message)
+                        last_broadcast = positions.copy()
+                except Exception as e:
+                    print(f"Error in broadcast_positions: {e}")
             
             await asyncio.sleep(broadcast_interval)
                 
-        except Exception:
+        except Exception as e:
+            print(f"Outer error in broadcast_positions: {e}")
             await asyncio.sleep(1)
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    global is_calibrating  # Move global declaration to the beginning of the function
-    await manager.connect(websocket)
+# Pydantic models for request validation
+class ServoUpdate(BaseModel):
+    servo_id: int
+    position: float
+
+class TorqueControl(BaseModel):
+    enabled: bool
+
+class CalibrationStep(BaseModel):
+    joint: str
+    angle: float
+    step_number: int
+    total_steps: Optional[int] = 1
+
+class CapturePosition(BaseModel):
+    joint: str
+    angle: float
+    step_number: int
+
+# SSE endpoint
+@app.get("/api/events")
+async def sse(request: Request):
+    client_id = f"client_{id(request)}_{asyncio.get_event_loop().time()}"
+    queue = asyncio.Queue()
     
+    await add_sse_client(client_id, queue)
+    
+    # Send initial positions
     try:
         if servo_controller and servo_controller.connected:
             positions = servo_controller.get_angles()
-            await websocket.send_text(json.dumps({
+            await send_sse_message(client_id, json.dumps({
                 'type': 'servo_positions',
                 'positions': positions
             }))
-            print(f"Sent initial positions to client: {positions}")
+    except Exception as e:
+        print(f"Error sending initial positions: {e}")
+        # Continue anyway
+    
+    async def event_generator():
+        try:
+            while True:
+                data = await queue.get()
+                if data == "close":
+                    break
+                yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await remove_sse_client(client_id)
+    
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # For NGINX
+        "Content-Type": "text/event-stream",
+        "Access-Control-Allow-Origin": "http://localhost:5173",
+        "Access-Control-Allow-Credentials": "true"
+    }
+    
+    return StreamingResponse(
+        event_generator(),
+        headers=headers
+    )
+
+# REST API endpoints
+@app.post("/api/servo")
+async def update_servo(data: ServoUpdate):
+    if servo_controller and servo_controller.connected:
+        try:
+            servo_controller.set_angle({data.servo_id: data.position})
+            return {"status": "success", "servo_id": data.servo_id, "position": data.position}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+@app.post("/api/center-all")
+async def center_all():
+    if servo_controller and servo_controller.connected:
+        angles = {servo_id: 0 for servo_id in servo_controller.get_servos()}
+        servo_controller.set_angle(angles)
+        return {"status": "success"}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+@app.get("/api/positions")
+async def get_positions():
+    if servo_controller and servo_controller.connected:
+        positions = servo_controller.get_angles()
+        return {"status": "success", "positions": positions}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+@app.get("/api/torque")
+async def get_torque():
+    if servo_controller and servo_controller.connected:
+        enabled = servo_controller.get_torque_enabled()
+        return {"status": "success", "enabled": enabled}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+@app.post("/api/torque")
+async def set_torque(data: TorqueControl):
+    if servo_controller and servo_controller.connected:
+        servo_controller.set_torque_enabled(data.enabled)
+        return {"status": "success", "enabled": data.enabled}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+# Calibration endpoints
+@app.post("/api/calibration/start")
+async def start_calibration():
+    global is_calibrating
+    if servo_controller and servo_controller.connected:
+        try:
+            is_calibrating = True
+            servo_controller.start_calibration()
+            return {"status": "success", "message": "Calibration mode started"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    return {"status": "error", "message": "Servo controller not connected"}
+
+@app.post("/api/calibration/capture")
+async def capture_position(data: CapturePosition):
+    if servo_controller and servo_controller.connected and is_calibrating:
+        servo_id = int(data.joint)
+        current_pos = servo_controller.get_positions()[servo_id]
         
-        while True:
-            message = await websocket.receive_text()
-            print(f"Received WebSocket message: {message}")
-            data = json.loads(message)
-            request_id = data.get('requestId')
+        # Map angle to calibration point
+        calibration_point = "zero"
+        if data.angle == 90:
+            calibration_point = "max"
+        elif data.angle == -90:
+            calibration_point = "min"
             
-            if data.get('type') == 'servo_update':
-                servo_id = data.get('servo_id')
-                position = data.get('position')
-                
-                print(f"Processing servo_update: servo_id={servo_id}, position={position}")
-                
-                if servo_id is not None and position is not None:
-                    if servo_controller and servo_controller.connected:
-                        # Convert the servo_id to int to ensure compatibility
-                        try:
-                            servo_id = int(servo_id)
-                            print(f"Setting servo {servo_id} to position {position}°")
-                            servo_controller.set_angle({servo_id: position})
-                            print(f"Successfully set servo {servo_id} to position {position}°")
-                        except Exception as e:
-                            print(f"Error setting servo position: {e}")
-                            await websocket.send_text(json.dumps({
-                                'type': 'error',
-                                'requestId': request_id,
-                                'message': f"Error setting position: {str(e)}"
-                            }))
-                            continue
-                    else:
-                        print("Cannot set position - servo controller not connected")
-                    
-                    await websocket.send_text(json.dumps({
-                        'type': 'ack',
-                        'requestId': request_id,
-                        'status': 'success',
-                        'servo_id': servo_id,
-                        'position': position
-                    }))
-                    print(f"Sent ack message for servo_update")
-                else:
-                    print(f"Invalid servo_update: Missing servo_id or position")
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'requestId': request_id,
-                        'message': "Missing servo_id or position"
-                    }))
-            
-            elif data.get('type') == 'center_all':
-                if servo_controller and servo_controller.connected:
-                    angles = {servo_id: 0 for servo_id in servo_controller.get_servos()}
-                    servo_controller.set_angle(angles)
-                
-                await websocket.send_text(json.dumps({
-                    'type': 'ack',
-                    'requestId': request_id,
-                    'status': 'success'
-                }))
-            
-            elif data.get('type') == 'start_calibration':
-                is_calibrating = True  # Set calibration flag
-                print(f"Starting calibration mode, is_calibrating={is_calibrating}")
-                if servo_controller and servo_controller.connected:
-                    try:
-                        servo_controller.start_calibration()
-                        
-                        # Send only an acknowledgment without positions
-                        await websocket.send_text(json.dumps({
-                            'type': 'calibration_started',
-                            'requestId': request_id,
-                            'message': 'Calibration mode started'
-                        }))
-                        print(f"Sent calibration_started acknowledgment")
-                    except Exception as e:
-                        print(f"Error starting calibration: {e}")
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': f'Failed to start calibration: {str(e)}',
-                            'requestId': request_id
-                        }))
-                else:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': 'Servo controller is not connected',
-                        'requestId': request_id
-                    }))
-            
-            elif data.get('type') == 'set_calibration_step':
-                # New message type to allow UI to control which step is active
-                if servo_controller and servo_controller.connected:
-                    joint_name = data.get('joint')
-                    angle = data.get('angle')
-                    step_number = int(data.get('step_number', 1))
-                    total_steps = int(data.get('total_steps', 1))
-                    
-                    print(f"Setting calibration step: joint={joint_name}, angle={angle}, step={step_number}/{total_steps}")
-                    
-                    try:
-                        # Only send acknowledgment back
-                        await websocket.send_text(json.dumps({
-                            'type': 'calibration_step_ack',
-                            'joint': joint_name,
-                            'angle': angle,
-                            'current_step': step_number,
-                            'total_steps': total_steps,
-                            'requestId': request_id
-                        }))
-                        print(f"Sent calibration_step_ack for joint={joint_name}, angle={angle}")
-                    except Exception as e:
-                        print(f"Error setting calibration step: {e}")
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': f'Failed to set calibration step: {str(e)}',
-                            'requestId': request_id
-                        }))
-                else:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': 'Servo controller is not connected',
-                        'requestId': request_id
-                    }))
-            
-            elif data.get('type') == 'capture_position':
-                if servo_controller and servo_controller.connected:
-                    joint_name = data.get('joint')
-                    angle = data.get('angle')
-                    step_number = int(data.get('step_number', 1))
-                    
-                    print(f"Capturing position for joint={joint_name}, angle={angle}, step={step_number}")
-                    
-                    # Find the ID of this servo
-                    servo_id = int(joint_name)  # In our case, joint_name is the numeric ID as a string
-                    current_pos = servo_controller.get_positions()[servo_id]
-                    
-                    calibration_point = "zero"
-                    if angle == 90:
-                        calibration_point = "max"
-                    elif angle == -90:
-                        calibration_point = "min"
-                        
-                    servo_controller.set_calibration_point(
-                        servo_id,
-                        calibration_point,
-                        current_pos
-                    )
-                    
-                    # Send ack with the captured position
-                    await websocket.send_text(json.dumps({
-                        'type': 'position_captured',
-                        'joint': joint_name,
-                        'angle': angle,
-                        'position': current_pos,
-                        'requestId': request_id
-                    }))
-                    
-                    # Let the UI decide the next step instead of the server
-                    # The UI will send a set_calibration_step message for the next step
-            
-            elif data.get('type') == 'end_calibration':
-                # New message type to explicitly end calibration
-                if is_calibrating and servo_controller and servo_controller.connected:
-                    is_calibrating = False
-                    print(f"Ending calibration mode, is_calibrating={is_calibrating}")
-                    servo_controller.end_calibration()
-                    servo_controller.enable_torque()
-                    
-                    # Only send acknowledgment
-                    await websocket.send_text(json.dumps({
-                        'type': 'calibration_completed',
-                        'requestId': request_id,
-                        'message': 'Calibration completed successfully'
-                    }))
-                    print(f"Sent calibration_completed acknowledgment")
-            
-            elif data.get('type') == 'cancel_calibration':
-                # Handle canceling calibration and returning to normal operation
-                if is_calibrating and servo_controller and servo_controller.connected:
-                    is_calibrating = False
-                    print(f"Canceling calibration mode, is_calibrating={is_calibrating}")
-                    
-                    # Cancel calibration in the servo controller
-                    servo_controller.cancel_calibration()
-                    
-                    # Re-enable torque
-                    servo_controller.set_torque_enabled(True)
-                    
-                    # Get current positions to send back to client
-                    positions = servo_controller.get_angles()
-                    
-                    # Send acknowledgment with current positions
-                    await websocket.send_text(json.dumps({
-                        'type': 'calibration_canceled',
-                        'requestId': request_id,
-                        'positions': positions,
-                        'message': 'Calibration canceled'
-                    }))
-                    print(f"Sent calibration_canceled with current positions")
-                else:
-                    await websocket.send_text(json.dumps({
-                        'type': 'ack',
-                        'requestId': request_id,
-                        'message': 'Not in calibration mode'
-                    }))
-            
-            elif data.get('type') == 'get_positions':
-                if servo_controller and servo_controller.connected:
-                    positions = servo_controller.get_angles()
-                    await websocket.send_text(json.dumps({
-                        'type': 'ack',
-                        'requestId': request_id,
-                        'status': 'success',
-                        'positions': positions
-                    }))
-                    
-            elif data.get('type') == 'get_torque_enabled':
-                if servo_controller and servo_controller.connected:
-                    enabled = servo_controller.get_torque_enabled()
-                    await websocket.send_text(json.dumps({
-                        'type': 'torque_status',
-                        'requestId': request_id,
-                        'enabled': enabled
-                    }))
-                    print(f"Sent torque status: {enabled}")
-                else:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'requestId': request_id,
-                        'message': 'Servo controller is not connected'
-                    }))
-                    
-            elif data.get('type') == 'set_torque_enabled':
-                if servo_controller and servo_controller.connected:
-                    enabled = data.get('enabled', True)
-                    servo_controller.set_torque_enabled(enabled)
-                    await websocket.send_text(json.dumps({
-                        'type': 'torque_status',
-                        'requestId': request_id,
-                        'enabled': enabled
-                    }))
-                    print(f"Set torque enabled: {enabled}")
-                else:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'requestId': request_id,
-                        'message': 'Servo controller is not connected'
-                    }))
-                    
-            else:
-                # Unknown message type
-                print(f"Unknown WebSocket message type: {data.get('type')}")
-                await websocket.send_text(json.dumps({
-                    'type': 'error',
-                    'requestId': request_id,
-                    'message': 'Unknown message type'
-                }))
-            
-    except WebSocketDisconnect:
-        # Reset calibration flag if client disconnects during calibration
-        if is_calibrating:
-            is_calibrating = False
-        manager.disconnect(websocket)
-    finally:
-        manager.disconnect(websocket)
+        servo_controller.set_calibration_point(
+            servo_id,
+            calibration_point,
+            current_pos
+        )
+        
+        return {
+            "status": "success",
+            "joint": data.joint,
+            "angle": data.angle,
+            "position": current_pos
+        }
+    return {"status": "error", "message": "Not in calibration mode or servo controller not connected"}
+
+@app.post("/api/calibration/complete")
+async def complete_calibration():
+    global is_calibrating
+    if servo_controller and servo_controller.connected and is_calibrating:
+        is_calibrating = False
+        servo_controller.end_calibration()
+        servo_controller.enable_torque()
+        return {"status": "success", "message": "Calibration completed successfully"}
+    return {"status": "error", "message": "Not in calibration mode or servo controller not connected"}
+
+@app.post("/api/calibration/cancel")
+async def cancel_calibration():
+    global is_calibrating
+    if servo_controller and servo_controller.connected and is_calibrating:
+        is_calibrating = False
+        servo_controller.cancel_calibration()
+        servo_controller.set_torque_enabled(True)
+        positions = servo_controller.get_angles()
+        return {"status": "success", "message": "Calibration canceled", "positions": positions}
+    return {"status": "success", "message": "Not in calibration mode"}
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=1212)
