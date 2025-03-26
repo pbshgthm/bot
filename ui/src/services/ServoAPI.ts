@@ -1,14 +1,13 @@
 /**
  * ServoAPI service
- * Handles communication with the servo controller via REST API and SSE for updates
+ * Handles communication with the servo controller via Socket.io
  */
 
-// Define the base API URL
-export const API_BASE_URL = "http://localhost:1212/api";
-export const SSE_URL = `${API_BASE_URL}/events`;
+import { io, Socket } from "socket.io-client";
 
-// Keep track of the SSE connection
-let eventSource: EventSource | null = null;
+// Socket connection config
+const SOCKET_URL = "http://localhost:1212";
+let socket: Socket | null = null;
 let eventListeners: Map<string, Set<(data: any) => void>> = new Map();
 
 export interface ServoPositions {
@@ -16,58 +15,40 @@ export interface ServoPositions {
 }
 
 /**
- * Initialize and get SSE connection for real-time updates
+ * Initialize socket connection
  */
-export const initSSE = (): EventSource => {
-  if (eventSource && eventSource.readyState === EventSource.OPEN) {
-    return eventSource;
+export const initSocket = (): Socket => {
+  if (socket && socket.connected) {
+    return socket;
   }
 
-  // Close existing connection if it's not closed
-  if (eventSource) {
-    eventSource.close();
+  // Close existing connection if it exists
+  if (socket) {
+    socket.disconnect();
   }
 
   // Create new connection
-  eventSource = new EventSource(SSE_URL);
+  socket = io(SOCKET_URL, {
+    reconnectionDelay: 1000,
+    reconnection: true,
+    transports: ["websocket"],
+  });
 
-  // Add event source options to encourage more frequent updates
-  if (eventSource.readyState === EventSource.CONNECTING) {
-    // Set a small retry timeout in case of connection issues
-    eventSource.addEventListener("error", () => {
-      if (eventSource && eventSource.readyState === EventSource.CLOSED) {
-        setTimeout(() => initSSE(), 1000); // Quick reconnect on failure
-      }
-    });
-  }
-
-  eventSource.onopen = () => {
-    // SSE connection established
-  };
-
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-
-      // Dispatch to any registered listeners for this event type
-      const listeners = eventListeners.get(data.type);
-      if (listeners) {
-        listeners.forEach((callback) => {
-          callback(data);
-        });
-      }
-    } catch (error) {
-      // Error processing SSE message
+  // Set up event forwarding to registered listeners
+  socket.onAny((eventName, data) => {
+    const listeners = eventListeners.get(eventName);
+    if (listeners) {
+      listeners.forEach((callback) => callback(data));
     }
-  };
+  });
 
-  return eventSource;
+  return socket;
 };
 
 /**
- * Register a listener for SSE events of a specific type
+ * Register a listener for socket events
  */
-export const addSSEListener = (
+export const addSocketListener = (
   eventType: string,
   callback: (data: any) => void
 ): (() => void) => {
@@ -78,8 +59,8 @@ export const addSSEListener = (
   const listeners = eventListeners.get(eventType)!;
   listeners.add(callback);
 
-  // Ensure SSE is initialized
-  initSSE();
+  // Ensure socket is initialized
+  initSocket();
 
   // Return a cleanup function
   return () => {
@@ -94,33 +75,20 @@ export const addSSEListener = (
 };
 
 /**
- * Make API request with proper error handling
+ * Emit event and get response
  */
-const fetchAPI = async (
-  endpoint: string,
-  method: string = "GET",
-  data?: any
-): Promise<any> => {
-  const url = `${API_BASE_URL}/${endpoint}`;
-  const options: RequestInit = {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  };
+const emitWithAck = async (event: string, data?: any): Promise<any> => {
+  const currentSocket = initSocket();
 
-  if (data && (method === "POST" || method === "PUT")) {
-    options.body = JSON.stringify(data);
-  }
-
-  const response = await fetch(url, options);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API error (${response.status}): ${errorText}`);
-  }
-
-  return response.json();
+  return new Promise((resolve, reject) => {
+    currentSocket.emit(event, data, (response: any) => {
+      if (response.status === "error") {
+        reject(new Error(response.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
 };
 
 /**
@@ -128,7 +96,7 @@ const fetchAPI = async (
  */
 export const getServoPositions = async (): Promise<ServoPositions> => {
   try {
-    const response = await fetchAPI("positions");
+    const response = await emitWithAck("get_positions");
     return response.positions;
   } catch (error) {
     throw error;
@@ -143,7 +111,7 @@ export const updateServoPosition = async (
   position: number
 ): Promise<{ success: boolean; servo_id: number; position: number }> => {
   try {
-    const response = await fetchAPI("servo", "POST", {
+    const response = await emitWithAck("update_servo", {
       servo_id: servoId,
       position,
     });
@@ -163,7 +131,7 @@ export const updateServoPosition = async (
  */
 export const startCalibration = async (): Promise<{ success: boolean }> => {
   try {
-    const response = await fetchAPI("calibration/start", "POST");
+    const response = await emitWithAck("calibration_start");
     return { success: response.status === "success" };
   } catch (error) {
     throw error;
@@ -171,11 +139,7 @@ export const startCalibration = async (): Promise<{ success: boolean }> => {
 };
 
 /**
- * Capture a calibration position - updated for client-driven calibration
- *
- * @param servoId - The ID of the servo being calibrated
- * @param angle - The calibration angle (0 for center, 90 for max, -90 for min)
- * @param stepNumber - The current step in the calibration process
+ * Capture a calibration position
  */
 export const captureCalibrationPosition = async (
   servoId: string | number,
@@ -183,7 +147,7 @@ export const captureCalibrationPosition = async (
   stepNumber: number
 ): Promise<{ success: boolean; position: number }> => {
   try {
-    const response = await fetchAPI("calibration/capture", "POST", {
+    const response = await emitWithAck("calibration_capture", {
       joint: servoId.toString(),
       angle,
       step_number: stepNumber,
@@ -203,7 +167,7 @@ export const captureCalibrationPosition = async (
  */
 export const endCalibration = async (): Promise<{ success: boolean }> => {
   try {
-    const response = await fetchAPI("calibration/complete", "POST");
+    const response = await emitWithAck("calibration_complete");
     return { success: response.status === "success" };
   } catch (error) {
     throw error;
@@ -215,7 +179,7 @@ export const endCalibration = async (): Promise<{ success: boolean }> => {
  */
 export const cancelCalibration = async (): Promise<{ success: boolean }> => {
   try {
-    const response = await fetchAPI("calibration/cancel", "POST");
+    const response = await emitWithAck("calibration_cancel");
     return { success: response.status === "success" };
   } catch (error) {
     throw error;
@@ -227,7 +191,7 @@ export const cancelCalibration = async (): Promise<{ success: boolean }> => {
  */
 export const getTorqueEnabled = async (): Promise<boolean> => {
   try {
-    const response = await fetchAPI("torque");
+    const response = await emitWithAck("get_torque");
     return response.enabled;
   } catch (error) {
     throw error;
@@ -241,7 +205,7 @@ export const setTorqueEnabled = async (
   enabled: boolean
 ): Promise<{ success: boolean }> => {
   try {
-    const response = await fetchAPI("torque", "POST", { enabled });
+    const response = await emitWithAck("set_torque", { enabled });
     return { success: response.status === "success" };
   } catch (error) {
     throw error;

@@ -3,7 +3,7 @@ import CalibrationUI from "./components/CalibrationUI";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
 import {
-  addSSEListener,
+  addSocketListener,
   cancelCalibration,
   getServoPositions,
   getTorqueEnabled,
@@ -42,13 +42,13 @@ function App() {
   const isDraggingRef = useRef(false);
   // Prevent infinite loops when updating positions
   const updatingFromServer = useRef(false);
-  // Throttle UI updates from SSE
+  // Throttle UI updates from socket
   const lastUpdateTimeRef = useRef(0);
   const throttleTimeMs = 10;
   // Track connection status internally to avoid multiple state updates
   const connectedRef = useRef(false);
-  // Track SSE cleanup function
-  const sseCleanupRef = useRef<(() => void) | null>(null);
+  // Track socket cleanup function
+  const socketCleanupRef = useRef<(() => void) | null>(null);
   const [calibrationMode, setCalibrationMode] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
   // Torque enabled state
@@ -95,10 +95,10 @@ function App() {
     [serverStatus]
   );
 
-  // Set up SSE connection for real-time updates
+  // Set up Socket.io connection for real-time updates
   useEffect(() => {
-    // Set up SSE listener for servo position updates
-    const cleanup = addSSEListener("servo_positions", (data) => {
+    // Set up Socket.io listener for servo position updates
+    const cleanup = addSocketListener("servo_positions", (data) => {
       const lastUpdateTime = lastUpdateTimeRef.current;
       const currentTime = Date.now();
 
@@ -161,7 +161,7 @@ function App() {
             });
           } catch (error) {
             updatingFromServer.current = false;
-            console.error("Error updating from SSE:", error);
+            console.error("Error updating from socket:", error);
           }
         }
       } else if (isDraggingRef.current) {
@@ -172,16 +172,16 @@ function App() {
     });
 
     // Store the cleanup function
-    sseCleanupRef.current = cleanup;
+    socketCleanupRef.current = cleanup;
 
     // Connection is considered established once we set up the listener
     updateConnectionStatus("connected");
 
-    // Clean up SSE on unmount
+    // Clean up Socket.io on unmount
     return () => {
-      if (sseCleanupRef.current) {
-        sseCleanupRef.current();
-        sseCleanupRef.current = null;
+      if (socketCleanupRef.current) {
+        socketCleanupRef.current();
+        socketCleanupRef.current = null;
       }
     };
   }, [updateConnectionStatus, jointAngles]);
@@ -261,7 +261,7 @@ function App() {
       setIsCalibrating(true);
       const result = await startCalibration();
       if (result.success) {
-        // Disable SSE position updates during calibration by setting isDraggingRef
+        // Disable socket position updates during calibration by setting isDraggingRef
         // This prevents real servo positions from overriding our target positions
         isDraggingRef.current = true;
 
@@ -371,17 +371,17 @@ function App() {
         console.error("Error setting torque:", error);
       }
 
-      // Reset flags and reconnect SSE with minimal delay
+      // Reset flags and reconnect Socket.io with minimal delay
       updatingFromServer.current = false;
 
-      // Re-enable SSE position updates
+      // Re-enable Socket.io position updates
       setTimeout(() => {
         isDraggingRef.current = false;
 
-        // Refresh SSE connection
-        if (sseCleanupRef.current) {
-          sseCleanupRef.current();
-          const cleanup = addSSEListener("servo_positions", (data) => {
+        // Refresh Socket.io connection
+        if (socketCleanupRef.current) {
+          socketCleanupRef.current();
+          const cleanup = addSocketListener("servo_positions", (data) => {
             if (
               data.positions &&
               !isDraggingRef.current &&
@@ -438,7 +438,7 @@ function App() {
             }
           });
 
-          sseCleanupRef.current = cleanup;
+          socketCleanupRef.current = cleanup;
         }
       }, 100);
     } catch (error) {
