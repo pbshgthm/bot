@@ -1,4 +1,5 @@
 {
-  "port": "/dev/tty.usbmodem58FA0829321",
+  "port": "/tmp/vport1",
+  "virtual_port": true,
   "servo_ids": [1, 2, 3, 4, 5, 6]
 }

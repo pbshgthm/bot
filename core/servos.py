@@ -3,6 +3,8 @@ import numpy as np
 import scservo_sdk as scs
 import json
 import os
+import serial
+import traceback
 
 PROTOCOL_VERSION = 0
 BAUDRATE = 1_000_000
@@ -28,9 +30,11 @@ CALIBRATION_FILENAME = "data/calibration.json"
 class Servos:
     def __init__(self, 
                  port=None, 
+                 virtual_port=None,
                  servo_ids=None, 
                  p_coef=8, i_coef=0, d_coef=16, 
-                 max_accel=254, accel=254):
+                 max_accel=254, accel=254,
+                ):
         # Config and calibration file paths
         self.config_file = os.path.join(os.path.dirname(__file__), CONFIG_FILENAME)
         self.calibration_file = os.path.join(os.path.dirname(__file__), CALIBRATION_FILENAME)
@@ -48,6 +52,7 @@ class Servos:
         
         # Use provided parameters or config values
         self.port = port or self.config.get('port')
+        self.virtual_port = virtual_port or self.config.get('virtual_port')
         self.servo_ids = servo_ids or self.config.get('servo_ids', [])
         
         # Configuration parameters
@@ -78,6 +83,30 @@ class Servos:
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
 
         try:
+            # Store the original setupPort method
+            original_setup_port = self.port_handler.setupPort
+            
+            def virtual_port_setup(cflag_baud):
+                if self.port_handler.is_open:
+                    self.port_handler.closePort()
+
+                self.port_handler.ser = serial.Serial(
+                    port=self.port_handler.port_name,
+                    # baudrate is intentionally not set here
+                    bytesize=serial.EIGHTBITS,
+                    timeout=0
+                )
+
+                self.port_handler.is_open = True
+                self.port_handler.ser.reset_input_buffer()
+                self.port_handler.tx_time_per_byte = (1000.0 / self.port_handler.baudrate) * 10.0
+                return True
+                
+            # Replace the setupPort method based on virtual_port setting
+            if self.virtual_port:
+                self.port_handler.setupPort = virtual_port_setup
+                print(f"[Servos] Using virtual port setup for {self.port}")
+            
             if not self.port_handler.openPort():
                 raise OSError(f"Failed to open port '{self.port}'")
             
@@ -89,6 +118,7 @@ class Servos:
             self.set_torque_enabled(True)
         
         except Exception as e:
+            traceback.print_exc()
             if hasattr(self, 'port_handler') and self.port_handler:
                 self.port_handler.closePort()
             raise e
@@ -345,37 +375,34 @@ class Servos:
     def _read(self, data_name, servo_ids=None):
         assert self.connected, "Not connected to servos. Call connect() first."
 
-        self.port_handler.ser.reset_output_buffer()
-        self.port_handler.ser.reset_input_buffer()
-
-        # If no servo IDs specified, use all servo IDs
         servo_ids = servo_ids or self.servo_ids
         if isinstance(servo_ids, int):
             servo_ids = [servo_ids]
 
         addr, size = SCS_CONTROL_TABLE[data_name]
         group_key = f"{data_name}_{'_'.join(map(str, servo_ids))}"
-        
-        if group_key not in self._readers:
-            reader = scs.GroupSyncRead(self.port_handler, self.packet_handler, addr, size)
-            for servo_id in servo_ids:
-                reader.addParam(servo_id)
-            self._readers[group_key] = reader
 
-        reader = self._readers[group_key]
-        for _ in range(NUM_RETRY):
+        # Always recreate the reader to avoid stale state
+        reader = scs.GroupSyncRead(self.port_handler, self.packet_handler, addr, size)
+        for servo_id in servo_ids:
+            reader.addParam(servo_id)
+
+        # Reset buffers before each read
+        self.port_handler.ser.reset_output_buffer()
+        self.port_handler.ser.reset_input_buffer()
+
+        for attempt in range(NUM_RETRY):
             if reader.txRxPacket() == scs.COMM_SUCCESS:
                 break
+            if attempt < NUM_RETRY - 1:
+                time.sleep(0.05)
         else:
-            raise RuntimeError("Communication error during read")
+            raise RuntimeError(f"Communication error during read after {NUM_RETRY} retries")
 
         return np.array([reader.getData(id, addr, size) for id in servo_ids], dtype=np.int32)
 
     def _write(self, data_name, values=None, servo_ids=None):
         assert self.connected, "Not connected to servos. Call connect() first."
-
-        self.port_handler.ser.reset_output_buffer()
-        self.port_handler.ser.reset_input_buffer()
 
         servo_ids = servo_ids or self.servo_ids
         if isinstance(servo_ids, int):
@@ -385,24 +412,25 @@ class Servos:
             values = [1] * len(servo_ids)
         if isinstance(values, (int, float, np.integer)):
             values = [values] * len(servo_ids)
-            
+
         values = np.array(values, dtype=np.int32)
         addr, size = SCS_CONTROL_TABLE[data_name]
         group_key = f"{data_name}_{'_'.join(map(str, servo_ids))}"
-        
-        if group_key not in self._writers:
-            writer = scs.GroupSyncWrite(self.port_handler, self.packet_handler, addr, size)
-            self._writers[group_key] = writer
-            for servo_id, val in zip(servo_ids, values):
-                writer.addParam(servo_id, self._to_bytes(val, size))
-        else:
-            writer = self._writers[group_key]
-            for servo_id, val in zip(servo_ids, values):
-                writer.changeParam(servo_id, self._to_bytes(val, size))
 
-        for _ in range(NUM_RETRY):
+        # Always recreate the writer to avoid stale state
+        writer = scs.GroupSyncWrite(self.port_handler, self.packet_handler, addr, size)
+        for servo_id, val in zip(servo_ids, values):
+            writer.addParam(servo_id, self._to_bytes(val, size))
+
+        # Reset buffers before each write
+        self.port_handler.ser.reset_output_buffer()
+        self.port_handler.ser.reset_input_buffer()
+
+        for attempt in range(NUM_RETRY):
             if writer.txPacket() == scs.COMM_SUCCESS:
                 break
+            if attempt < NUM_RETRY - 1:
+                time.sleep(0.05)
         else:
             raise RuntimeError("Communication error during write")
 
