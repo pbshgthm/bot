@@ -6,7 +6,7 @@ from core.servos import Servos
 from typing import Dict, Any, Optional
 
 # Create Socket.IO server
-sio = socketio.AsyncServer(
+socket = socketio.AsyncServer(
     cors_allowed_origins=["http://localhost:5173"],
     async_mode="aiohttp",
     ping_interval=1,
@@ -15,7 +15,7 @@ sio = socketio.AsyncServer(
 
 # Create aiohttp web application
 app = web.Application()
-sio.attach(app)
+socket.attach(app)
 
 # Global variables
 servo_controller = None
@@ -53,7 +53,7 @@ async def broadcast_positions():
                             break
                     
                     # Always broadcast for consistent timing
-                    await sio.emit('servo_positions', {
+                    await socket.emit('servo_positions', {
                         'positions': positions
                     })
                     last_broadcast = positions.copy()
@@ -73,7 +73,7 @@ async def on_connect(sid, environ):
     if servo_controller and servo_controller.connected:
         try:
             positions = servo_controller.get_angles()
-            await sio.emit('servo_positions', {'positions': positions}, room=sid)
+            await socket.emit('servo_positions', {'positions': positions}, room=sid)
         except Exception as e:
             print(f"Error sending initial positions: {e}")
 
@@ -184,17 +184,17 @@ async def on_center_all(sid, data=None):
     return {"status": "success"}
 
 # Register event handlers
-sio.on('connect', on_connect)
-sio.on('disconnect', on_disconnect)
-sio.on('update_servo', on_update_servo)
-sio.on('get_positions', on_get_positions)
-sio.on('get_torque', on_get_torque)
-sio.on('set_torque', on_set_torque)
-sio.on('calibration_start', on_calibration_start)
-sio.on('calibration_capture', on_calibration_capture)
-sio.on('calibration_complete', on_calibration_complete)
-sio.on('calibration_cancel', on_calibration_cancel)
-sio.on('center_all', on_center_all)
+socket.on('connect', on_connect)
+socket.on('disconnect', on_disconnect)
+socket.on('update_servo', on_update_servo)
+socket.on('get_positions', on_get_positions)
+socket.on('get_torque', on_get_torque)
+socket.on('set_torque', on_set_torque)
+socket.on('calibration_start', on_calibration_start)
+socket.on('calibration_capture', on_calibration_capture)
+socket.on('calibration_complete', on_calibration_complete)
+socket.on('calibration_cancel', on_calibration_cancel)
+socket.on('center_all', on_center_all)
 
 async def init_app():
     await init_servo_controller()
