@@ -1,5 +1,4 @@
 {
-  "port": "/tmp/vport1",
-  "virtual_port": true,
+  "port": "/dev/ttyACM0",
   "servo_ids": [1, 2, 3, 4, 5, 6]
 }

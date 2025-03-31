@@ -6,7 +6,7 @@
 import { io, Socket } from "socket.io-client";
 
 // Socket connection config
-const SOCKET_URL = "http://localhost:1212";
+const SOCKET_URL = `http://${window.location.hostname}:1212`;
 let socket: Socket | null = null;
 let eventListeners: Map<string, Set<(data: any) => void>> = new Map();
 

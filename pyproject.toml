@@ -10,6 +10,7 @@ dependencies = [
     "pyserial>=3.5",
     "python-socketio>=5.12.1",
     "aiohttp>=3.11.14",
+    "uvicorn>=0.34.0",
 ]
 
 [build-system]

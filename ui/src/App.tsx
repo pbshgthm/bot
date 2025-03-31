@@ -3,13 +3,13 @@ import CalibrationUI from "./components/CalibrationUI";
 import RobotControls from "./components/RobotControls";
 import URDFViewer from "./components/URDFViewer";
 import {
-  addSocketListener,
-  cancelCalibration,
-  getServoPositions,
-  getTorqueEnabled,
-  setTorqueEnabled,
-  startCalibration,
-  updateServoPosition,
+    addSocketListener,
+    cancelCalibration,
+    getServoPositions,
+    getTorqueEnabled,
+    setTorqueEnabled,
+    startCalibration,
+    updateServoPosition,
 } from "./services/ServoAPI";
 
 // Direct mapping from URDF joint names to servo IDs (only needed for API communication)
